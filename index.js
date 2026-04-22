@@ -110,7 +110,8 @@ function validateApiKey(req, res) {
 function buildLearnerPayload(name, email) {
   return {
     Name: name,
-    Email__c: email,
+    Learner_Email_ID__c: email,
+    Learner_Gender__c: "Male", // or dynamic later
     OwnerId: SF_OWNER_ID,
     SDP_Branch__c: SF_BRANCH_ID,
     SDP_Cohort__c: SF_COHORT_ID
