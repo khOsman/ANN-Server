@@ -67,18 +67,17 @@ async function getSalesforceAccessToken() {
 
     const requestBody = querystring.stringify({
       grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion
+      assertion: assertion
     });
 
-    const response = await axios.post(
-      `${SF_LOGIN_URL}/services/oauth2/token`,
-      requestBody,
-      {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
-        }
+    const response = await axios({
+      method: 'post',
+      url: `${SF_LOGIN_URL}/services/oauth2/token`,
+      data: requestBody,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
       }
-    );
+    });
 
     return response.data;
   } catch (error) {
@@ -114,7 +113,7 @@ function buildLearnerPayload(name, email,gender) {
     Name: name,
     Learner_Email_ID__c: email,
     Learner_Gender__c: gender || "Male", // or dynamic later
-    OwnerId: SF_OWNER_ID,
+    // OwnerId: SF_OWNER_ID,
     SDP_Branch__c: SF_BRANCH_ID,
     SDP_Cohort__c: SF_COHORT_ID
   };
