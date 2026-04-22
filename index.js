@@ -50,41 +50,55 @@ if (missingEnv.length > 0) {
 // -------------------------------
 // Helper: Generate Salesforce JWT Access Token
 // -------------------------------
+import querystring from 'querystring';
+
 async function getSalesforceAccessToken() {
-  try {
-    const now = Math.floor(Date.now() / 1000);
+  const now = Math.floor(Date.now() / 1000);
 
-    const assertion = jwt.sign(
-      {
-        iss: SF_CLIENT_ID,
-        sub: SF_USERNAME,
-        aud: SF_LOGIN_URL,
-        exp: now + 300
-      },
-      SF_PRIVATE_KEY,
-      { algorithm: 'RS256' }
-    );
+  const assertion = jwt.sign(
+    {
+      iss: SF_CLIENT_ID,
+      sub: SF_USERNAME,
+      aud: SF_LOGIN_URL,
+      exp: now + 300
+    },
+    SF_PRIVATE_KEY,
+    { algorithm: 'RS256' }
+  );
 
-    const requestBody = querystring.stringify({
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion: assertion
-    });
+  const body = querystring.stringify({
+    grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+    assertion
+  });
 
-    const response = await axios({
-      method: 'post',
-      url: `${SF_LOGIN_URL}/services/oauth2/token`,
-      data: requestBody,
+  const response = await axios.post(
+    `${SF_LOGIN_URL}/services/oauth2/token`,
+    body,
+    {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded'
       }
-    });
+    }
+  );
 
-    return response.data;
-  } catch (error) {
-    console.error('🔴 JWT token error:', error.response?.data || error.message);
-    throw error;
-  }
+  return response.data;
 }
+
+app.get('/test-jwt-token', async (req, res) => {
+  try {
+    const tokenData = await getSalesforceAccessToken();
+    res.json({
+      success: true,
+      instance_url: tokenData.instance_url,
+      has_access_token: !!tokenData.access_token
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.response?.data || error.message
+    });
+  }
+});
 
 // -------------------------------
 // Helper: Validate API key
