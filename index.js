@@ -50,7 +50,6 @@ if (missingEnv.length > 0) {
 // -------------------------------
 // Helper: Generate Salesforce JWT Access Token
 // -------------------------------
-import querystring from 'querystring';
 
 async function getSalesforceAccessToken() {
   const now = Math.floor(Date.now() / 1000);
