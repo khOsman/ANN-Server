@@ -107,11 +107,11 @@ function validateApiKey(req, res) {
 // IMPORTANT:
 // Update field API names if your Salesforce object uses different names
 // -------------------------------
-function buildLearnerPayload(name, email) {
+function buildLearnerPayload(name, email,gender) {
   return {
     Name: name,
     Learner_Email_ID__c: email,
-    Learner_Gender__c: "Male", // or dynamic later
+    Learner_Gender__c: gender || "Male", // or dynamic later
     OwnerId: SF_OWNER_ID,
     SDP_Branch__c: SF_BRANCH_ID,
     SDP_Cohort__c: SF_COHORT_ID
@@ -257,7 +257,7 @@ app.get('/object/:objectName/:id', async (req, res) => {
 app.post('/create-bisd-learner', async (req, res) => {
   if (!validateApiKey(req, res)) return;
 
-  const { name, email } = req.body;
+  const { name, email, gender } = req.body;
 
   if (!name || !email) {
     return res.status(400).json({
@@ -269,7 +269,7 @@ app.post('/create-bisd-learner', async (req, res) => {
   try {
     const { access_token, instance_url } = await getSalesforceAccessToken();
 
-    const learnerPayload = buildLearnerPayload(name, email);
+    const learnerPayload = buildLearnerPayload(name, email, gender);
 
     const response = await axios.post(
       `${instance_url}/services/data/${SF_API_VERSION}/sobjects/BISD_Learners__c/`,
