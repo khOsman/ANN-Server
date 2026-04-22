@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 
 import querystring from 'querystring';
+import { env } from 'process';
 dotenv.config();
 
 const app = express();
@@ -24,6 +25,7 @@ const SF_BRANCH_ID = process.env.SF_BRANCH_ID;
 const SF_COHORT_ID = process.env.SF_COHORT_ID;
 
 const APP_API_KEY = process.env.APP_API_KEY;
+const SF_ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 
 // Private key should be stored in Render env with \n escaped
 const SF_PRIVATE_KEY = (process.env.SF_PRIVATE_KEY || '').replace(/\\n/g, '\n');
@@ -283,6 +285,7 @@ app.post('/create-bisd-learner', async (req, res) => {
   try {
     const { access_token, instance_url } = await getSalesforceAccessToken();
 
+    access_token = SF_ACCESS_TOKEN;
     const learnerPayload = buildLearnerPayload(name, email, gender);
 
     const response = await axios.post(
