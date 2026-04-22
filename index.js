@@ -3,6 +3,7 @@ import axios from 'axios';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 
+import querystring from 'querystring';
 dotenv.config();
 
 const app = express();
@@ -55,22 +56,23 @@ async function getSalesforceAccessToken() {
 
     const assertion = jwt.sign(
       {
-        iss: SF_CLIENT_ID,        // Connected App Consumer Key
-        sub: SF_USERNAME,         // Salesforce username
-        aud: SF_LOGIN_URL,        // https://login.salesforce.com or https://test.salesforce.com
-        exp: now + 300            // expires in 5 minutes
+        iss: SF_CLIENT_ID,
+        sub: SF_USERNAME,
+        aud: SF_LOGIN_URL,
+        exp: now + 300
       },
       SF_PRIVATE_KEY,
       { algorithm: 'RS256' }
     );
 
-    const params = new URLSearchParams();
-    params.append('grant_type', 'urn:ietf:params:oauth:grant-type:jwt-bearer');
-    params.append('assertion', assertion);
+    const requestBody = querystring.stringify({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion
+    });
 
     const response = await axios.post(
       `${SF_LOGIN_URL}/services/oauth2/token`,
-      params.toString(),
+      requestBody,
       {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
@@ -78,7 +80,7 @@ async function getSalesforceAccessToken() {
       }
     );
 
-    return response.data; // { access_token, instance_url, ... }
+    return response.data;
   } catch (error) {
     console.error('🔴 JWT token error:', error.response?.data || error.message);
     throw error;
