@@ -1,7 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
-
+import jwt from 'jsonwebtoken';
 
 dotenv.config();
 
@@ -10,110 +10,162 @@ const port = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// Required Salesforce OAuth Environment Variables
-const CLIENT_ID = process.env.CLIENT_ID;
-const CLIENT_SECRET = process.env.CLIENT_SECRET;
-const REDIRECT_URI = process.env.REDIRECT_URI;
-
+// -------------------------------
+// Environment Variables
+// -------------------------------
+const SF_CLIENT_ID = process.env.SF_CLIENT_ID;
+const SF_USERNAME = process.env.SF_USERNAME;
+const SF_LOGIN_URL = process.env.SF_LOGIN_URL || 'https://login.salesforce.com';
 const SF_API_VERSION = process.env.SF_API_VERSION || 'v66.0';
+
 const SF_OWNER_ID = process.env.SF_OWNER_ID;
 const SF_BRANCH_ID = process.env.SF_BRANCH_ID;
 const SF_COHORT_ID = process.env.SF_COHORT_ID;
 
-const AUTH_URL = 'https://login.salesforce.com/services/oauth2/authorize';
-const TOKEN_URL = 'https://login.salesforce.com/services/oauth2/token';
+const APP_API_KEY = process.env.APP_API_KEY;
+
+// Private key should be stored in Render env with \n escaped
+const SF_PRIVATE_KEY = (process.env.SF_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 
 // -------------------------------
-// Step 1: Open Salesforce Login Page
+// Validation on startup
 // -------------------------------
-// app.get('/', (req, res) => {
-//   const loginUrl = `${AUTH_URL}?response_type=code&client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`;
-//   open(loginUrl);
-//   res.send(`Redirecting to Salesforce login...<br><a href="${loginUrl}">${loginUrl}</a>`);
-// });
+const requiredEnv = [
+  'SF_CLIENT_ID',
+  'SF_USERNAME',
+  'SF_OWNER_ID',
+  'SF_BRANCH_ID',
+  'SF_COHORT_ID',
+  'APP_API_KEY',
+  'SF_PRIVATE_KEY'
+];
 
+const missingEnv = requiredEnv.filter((key) => !process.env[key]);
+
+if (missingEnv.length > 0) {
+  console.error('❌ Missing required environment variables:', missingEnv.join(', '));
+}
+
+// -------------------------------
+// Helper: Generate Salesforce JWT Access Token
+// -------------------------------
+async function getSalesforceAccessToken() {
+  try {
+    const now = Math.floor(Date.now() / 1000);
+
+    const assertion = jwt.sign(
+      {
+        iss: SF_CLIENT_ID,        // Connected App Consumer Key
+        sub: SF_USERNAME,         // Salesforce username
+        aud: SF_LOGIN_URL,        // https://login.salesforce.com or https://test.salesforce.com
+        exp: now + 300            // expires in 5 minutes
+      },
+      SF_PRIVATE_KEY,
+      { algorithm: 'RS256' }
+    );
+
+    const params = new URLSearchParams();
+    params.append('grant_type', 'urn:ietf:params:oauth:grant-type:jwt-bearer');
+    params.append('assertion', assertion);
+
+    const response = await axios.post(
+      `${SF_LOGIN_URL}/services/oauth2/token`,
+      params.toString(),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      }
+    );
+
+    return response.data; // { access_token, instance_url, ... }
+  } catch (error) {
+    console.error('🔴 JWT token error:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
+// -------------------------------
+// Helper: Validate API key
+// -------------------------------
+function validateApiKey(req, res) {
+  const apiKey = req.headers['x-api-key'];
+
+  if (!apiKey || apiKey !== APP_API_KEY) {
+    res.status(403).json({
+      success: false,
+      message: 'Invalid or missing API key.'
+    });
+    return false;
+  }
+
+  return true;
+}
+
+// -------------------------------
+// Helper: Build Learner Payload
+// IMPORTANT:
+// Update field API names if your Salesforce object uses different names
+// -------------------------------
+function buildLearnerPayload(name, email) {
+  return {
+    Name: name,
+    Email__c: email,
+    OwnerId: SF_OWNER_ID,
+    SDP_Branch__c: SF_BRANCH_ID,
+    SDP_Cohort__c: SF_COHORT_ID
+  };
+}
+
+// -------------------------------
+// Health Check
+// -------------------------------
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Server is running.'
+  });
+});
+
+// -------------------------------
+// Root route
+// -------------------------------
 app.get('/', (req, res) => {
-  const loginUrl = `${AUTH_URL}?response_type=code&client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`;
   res.send(`
-    <h2>Salesforce Login</h2>
-    <p><a href="${loginUrl}" target="_blank">Click here to authenticate with Salesforce</a></p>
-    <p>${loginUrl}</p>
+    <h2>ANN Server Integration</h2>
+    <p>JWT-based Salesforce API server is running.</p>
+    <p>Available routes:</p>
+    <ul>
+      <li>GET /health</li>
+      <li>POST /create-bisd-learner</li>
+      <li>GET /test-create-bisd-learner</li>
+      <li>GET /query?objectName=OBJECT&fields=Id,Name&where=Name='Test'</li>
+      <li>GET /object/:objectName/:id</li>
+    </ul>
   `);
 });
 
 // -------------------------------
-// Step 2: Callback after login with authorization code
-// -------------------------------
-app.get('/callback', async (req, res) => {
-  const { code } = req.query;
-
-  if (!code) {
-    return res.status(400).send('Missing authorization code in callback URL.');
-  }
-
-  try {
-    const tokenRes = await axios.post(TOKEN_URL, null, {
-      params: {
-        grant_type: 'authorization_code',
-        code,
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        redirect_uri: REDIRECT_URI,
-      },
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    });
-
-    const { access_token, refresh_token, instance_url } = tokenRes.data;
-
-    global.accessToken = access_token;
-    global.instanceUrl = instance_url;
-    global.refreshToken = refresh_token;
-
-    res.json({
-      message: 'Salesforce authentication successful.',
-      access_token,
-      refresh_token,
-      instance_url
-    });
-  } catch (err) {
-    console.error('🔴 ERROR:', err.response?.data || err.message);
-    res.status(500).send('OAuth token exchange failed.');
-  }
-});
-
-// -------------------------------
-// Helper: check auth
-// -------------------------------
-function getSalesforceSession(res) {
-  const access_token = global.accessToken;
-  const instance_url = global.instanceUrl;
-
-  if (!access_token || !instance_url) {
-    res.status(401).json({
-      success: false,
-      message: 'Authenticate first by visiting /.'
-    });
-    return null;
-  }
-
-  return { access_token, instance_url };
-}
-
-// -------------------------------
-// Existing query endpoint
+// Query Salesforce object records
+// Protected by API key
+// Example:
+// /query?objectName=SDP_Branch__c&fields=Id,Name&where=Name='Test'
 // -------------------------------
 app.get('/query', async (req, res) => {
-  const session = getSalesforceSession(res);
-  if (!session) return;
+  if (!validateApiKey(req, res)) return;
 
-  const { access_token, instance_url } = session;
   const { objectName, where, limit, fields } = req.query;
 
   if (!objectName) {
-    return res.status(400).send('❌ Missing `objectName` query parameter.');
+    return res.status(400).json({
+      success: false,
+      message: 'Missing objectName query parameter.'
+    });
   }
 
   try {
+    const { access_token, instance_url } = await getSalesforceAccessToken();
+
     let fieldClause;
     if (!fields) {
       fieldClause = 'Id';
@@ -134,29 +186,42 @@ app.get('/query', async (req, res) => {
     const response = await axios.get(
       `${instance_url}/services/data/${SF_API_VERSION}/query`,
       {
-        headers: { Authorization: `Bearer ${access_token}` },
+        headers: {
+          Authorization: `Bearer ${access_token}`
+        },
         params: { q: soql }
       }
     );
 
-    res.json(response.data.records);
-  } catch (err) {
-    console.error('🔴 SOQL error:', err.response?.data || err.message);
-    res.status(500).send(`Failed to query ${objectName}.`);
+    return res.status(200).json({
+      success: true,
+      totalSize: response.data.totalSize,
+      done: response.data.done,
+      records: response.data.records
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to query Salesforce.',
+      error: error.response?.data || error.message
+    });
   }
 });
 
 // -------------------------------
-// Existing generic object fetch endpoint
+// Fetch a specific Salesforce object record by ID
+// Protected by API key
+// Example:
+// /object/SDP_Branch__c/a2t4H000000K1ap
 // -------------------------------
 app.get('/object/:objectName/:id', async (req, res) => {
-  const session = getSalesforceSession(res);
-  if (!session) return;
+  if (!validateApiKey(req, res)) return;
 
-  const { access_token, instance_url } = session;
   const { objectName, id } = req.params;
 
   try {
+    const { access_token, instance_url } = await getSalesforceAccessToken();
+
     const response = await axios.get(
       `${instance_url}/services/data/${SF_API_VERSION}/sobjects/${objectName}/${id}`,
       {
@@ -166,47 +231,44 @@ app.get('/object/:objectName/:id', async (req, res) => {
       }
     );
 
-    res.json(response.data);
-  } catch (err) {
-    console.error('🔴 Error fetching record:', err.response?.data || err.message);
-    res.status(500).send('Failed to fetch object record.');
+    return res.status(200).json({
+      success: true,
+      record: response.data
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Salesforce record.',
+      error: error.response?.data || error.message
+    });
   }
 });
 
 // -------------------------------
-// NEW: Create BISD Learner for test scenario
+// Create BISD Learner from request body
+// Protected by API key
+// Body:
+// {
+//   "name": "Test Participant",
+//   "email": "test.abc@gmail.com"
+// }
 // -------------------------------
 app.post('/create-bisd-learner', async (req, res) => {
-  const session = getSalesforceSession(res);
-  if (!session) return;
+  if (!validateApiKey(req, res)) return;
 
-  const { access_token, instance_url } = session;
   const { name, email } = req.body;
 
   if (!name || !email) {
     return res.status(400).json({
       success: false,
-      message: 'Both `name` and `email` are required.'
-    });
-  }
-
-  if (!SF_BRANCH_ID || !SF_COHORT_ID || !SF_OWNER_ID) {
-    return res.status(500).json({
-      success: false,
-      message: 'Missing SF_BRANCH_ID, SF_COHORT_ID, or SF_OWNER_ID in .env'
+      message: 'Both name and email are required.'
     });
   }
 
   try {
-    // IMPORTANT:
-    // Replace field API names below if your BISD_Learners__c object uses different ones.
-    const learnerPayload = {
-      Name: name,
-      Email__c: email,
-      OwnerId: SF_OWNER_ID,
-      SDP_Branch__c: SF_BRANCH_ID,
-      SDP_Cohort__c: SF_COHORT_ID
-    };
+    const { access_token, instance_url } = await getSalesforceAccessToken();
+
+    const learnerPayload = buildLearnerPayload(name, email);
 
     const response = await axios.post(
       `${instance_url}/services/data/${SF_API_VERSION}/sobjects/BISD_Learners__c/`,
@@ -219,40 +281,43 @@ app.post('/create-bisd-learner', async (req, res) => {
       }
     );
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: 'BISD Learner created successfully.',
       salesforce_record_id: response.data.id,
       payload_sent: learnerPayload
     });
-  } catch (err) {
-    console.error('🔴 Create BISD Learner error:', err.response?.data || err.message);
+  } catch (error) {
+    console.error('🔴 Create BISD Learner error:', error.response?.data || error.message);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Failed to create BISD Learner.',
-      error: err.response?.data || err.message
+      error: error.response?.data || error.message
     });
   }
 });
 
 // -------------------------------
-// Optional test route for browser/manual testing
+// Browser test route
+// Protected by API key in query string for quick test
+// Example:
+// /test-create-bisd-learner?apiKey=YOUR_KEY
 // -------------------------------
 app.get('/test-create-bisd-learner', async (req, res) => {
-  const session = getSalesforceSession(res);
-  if (!session) return;
+  const apiKey = req.query.apiKey;
 
-  const { access_token, instance_url } = session;
+  if (!apiKey || apiKey !== APP_API_KEY) {
+    return res.status(403).json({
+      success: false,
+      message: 'Invalid or missing apiKey query parameter.'
+    });
+  }
 
   try {
-    const learnerPayload = {
-      Name: 'Test Participant',
-      Email__c: 'test.abc@gmail.com',
-      OwnerId: SF_OWNER_ID,
-      SDP_Branch__c: SF_BRANCH_ID,
-      SDP_Cohort__c: SF_COHORT_ID
-    };
+    const { access_token, instance_url } = await getSalesforceAccessToken();
+
+    const learnerPayload = buildLearnerPayload('Test Participant', 'test.abc@gmail.com');
 
     const response = await axios.post(
       `${instance_url}/services/data/${SF_API_VERSION}/sobjects/BISD_Learners__c/`,
@@ -265,19 +330,19 @@ app.get('/test-create-bisd-learner', async (req, res) => {
       }
     );
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: 'Test BISD Learner created successfully.',
       salesforce_record_id: response.data.id,
       payload_sent: learnerPayload
     });
-  } catch (err) {
-    console.error('🔴 Test create error:', err.response?.data || err.message);
+  } catch (error) {
+    console.error('🔴 Test create error:', error.response?.data || error.message);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'Failed to create test BISD Learner.',
-      error: err.response?.data || err.message
+      error: error.response?.data || error.message
     });
   }
 });
@@ -286,5 +351,5 @@ app.get('/test-create-bisd-learner', async (req, res) => {
 // Start server
 // -------------------------------
 app.listen(port, () => {
-  console.log(`✅ App running: http://localhost:${port}`);
+  console.log(`✅ App running on port ${port}`);
 });
