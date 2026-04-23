@@ -104,6 +104,16 @@ app.get('/test-jwt-token', async (req, res) => {
 // -------------------------------
 // Helper: Validate API key
 // -------------------------------
+app.get('/debug-env', (req, res) => {
+  res.json({
+    hasPrivateKey: !!SF_PRIVATE_KEY,
+    startsWith: SF_PRIVATE_KEY ? SF_PRIVATE_KEY.substring(0, 30) : null,
+    containsBegin: SF_PRIVATE_KEY ? SF_PRIVATE_KEY.includes('BEGIN PRIVATE KEY') : false,
+    containsEnd: SF_PRIVATE_KEY ? SF_PRIVATE_KEY.includes('END PRIVATE KEY') : false
+  });
+});
+
+
 function validateApiKey(req, res) {
   const apiKey = req.headers['x-api-key'];
 
