@@ -87,11 +87,11 @@ async function getSalesforceAccessToken() {
 
 app.get('/test-jwt-token', async (req, res) => {
   try {
-    const tokenData = await getSalesforceAccessToken();
+    const tokenData = SF_ACCESS_TOKEN; //await getSalesforceAccessToken();
     res.json({
       success: true,
-      instance_url: tokenData.instance_url,
-      has_access_token: !!tokenData.access_token
+      instance_url: tokenData,//tokenData.instance_url,
+      has_access_token: !!tokenData//!!tokenData.access_token
     });
   } catch (error) {
     res.status(500).json({
@@ -112,7 +112,6 @@ app.get('/debug-env', (req, res) => {
     containsEnd: SF_PRIVATE_KEY ? SF_PRIVATE_KEY.includes('END PRIVATE KEY') : false
   });
 });
-
 
 function validateApiKey(req, res) {
   const apiKey = req.headers['x-api-key'];
