@@ -2,9 +2,8 @@ import express from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
-
 import querystring from 'querystring';
-import { env } from 'process';
+
 dotenv.config();
 
 const app = express();
@@ -20,12 +19,9 @@ const SF_USERNAME = process.env.SF_USERNAME;
 const SF_LOGIN_URL = process.env.SF_LOGIN_URL || 'https://login.salesforce.com';
 const SF_API_VERSION = process.env.SF_API_VERSION || 'v66.0';
 
-const SF_OWNER_ID = process.env.SF_OWNER_ID;
 const SF_BRANCH_ID = process.env.SF_BRANCH_ID;
 const SF_COHORT_ID = process.env.SF_COHORT_ID;
-
 const APP_API_KEY = process.env.APP_API_KEY;
-const SF_ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 
 // Private key should be stored in Render env with \n escaped
 const SF_PRIVATE_KEY = (process.env.SF_PRIVATE_KEY || '').replace(/\\n/g, '\n');
@@ -36,7 +32,6 @@ const SF_PRIVATE_KEY = (process.env.SF_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 const requiredEnv = [
   'SF_CLIENT_ID',
   'SF_USERNAME',
-  'SF_OWNER_ID',
   'SF_BRANCH_ID',
   'SF_COHORT_ID',
   'APP_API_KEY',
@@ -52,67 +47,77 @@ if (missingEnv.length > 0) {
 // -------------------------------
 // Helper: Generate Salesforce JWT Access Token
 // -------------------------------
-
 async function getSalesforceAccessToken() {
-  const now = Math.floor(Date.now() / 1000);
+  try {
+    const now = Math.floor(Date.now() / 1000);
 
-  const assertion = jwt.sign(
-    {
-      iss: SF_CLIENT_ID,
-      sub: SF_USERNAME,
-      aud: SF_LOGIN_URL,
-      exp: now + 300
-    },
-    SF_PRIVATE_KEY,
-    { algorithm: 'RS256' }
-  );
+    const assertion = jwt.sign(
+      {
+        iss: SF_CLIENT_ID,
+        sub: SF_USERNAME,
+        aud: SF_LOGIN_URL,
+        exp: now + 300
+      },
+      SF_PRIVATE_KEY,
+      { algorithm: 'RS256' }
+    );
 
-  const body = querystring.stringify({
-    grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-    assertion
-  });
+    const body = querystring.stringify({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion
+    });
 
-  const response = await axios.post(
-    `${SF_LOGIN_URL}/services/oauth2/token`,
-    body,
-    {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
+    const response = await axios.post(
+      `${SF_LOGIN_URL}/services/oauth2/token`,
+      body,
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
       }
-    }
-  );
+    );
 
-  return response.data;
+    return response.data;
+  } catch (error) {
+    console.error('🔴 JWT token error:', error.response?.data || error.message);
+    throw error;
+  }
 }
 
+// -------------------------------
+// Debug Routes
+// -------------------------------
 app.get('/test-jwt-token', async (req, res) => {
   try {
-    const tokenData = SF_ACCESS_TOKEN; //await getSalesforceAccessToken();
-    res.json({
+    const tokenData = await getSalesforceAccessToken();
+
+    return res.status(200).json({
       success: true,
-      instance_url: tokenData,//tokenData.instance_url,
-      has_access_token: !!tokenData//!!tokenData.access_token
+      instance_url: tokenData.instance_url,
+      has_access_token: !!tokenData.access_token
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error.response?.data || error.message
     });
   }
 });
 
-// -------------------------------
-// Helper: Validate API key
-// -------------------------------
 app.get('/debug-env', (req, res) => {
   res.json({
     hasPrivateKey: !!SF_PRIVATE_KEY,
     startsWith: SF_PRIVATE_KEY ? SF_PRIVATE_KEY.substring(0, 30) : null,
     containsBegin: SF_PRIVATE_KEY ? SF_PRIVATE_KEY.includes('BEGIN PRIVATE KEY') : false,
-    containsEnd: SF_PRIVATE_KEY ? SF_PRIVATE_KEY.includes('END PRIVATE KEY') : false
+    containsEnd: SF_PRIVATE_KEY ? SF_PRIVATE_KEY.includes('END PRIVATE KEY') : false,
+    SF_LOGIN_URL,
+    SF_USERNAME
   });
 });
 
+// -------------------------------
+// Helper: Validate API key
+// -------------------------------
 function validateApiKey(req, res) {
   const apiKey = req.headers['x-api-key'];
 
@@ -129,15 +134,12 @@ function validateApiKey(req, res) {
 
 // -------------------------------
 // Helper: Build Learner Payload
-// IMPORTANT:
-// Update field API names if your Salesforce object uses different names
 // -------------------------------
-function buildLearnerPayload(name, email,gender) {
+function buildLearnerPayload(name, email, gender) {
   return {
     Name: name,
     Learner_Email_ID__c: email,
-    Learner_Gender__c: gender || "Male", // or dynamic later
-    // OwnerId: SF_OWNER_ID,
+    Learner_Gender__c: gender || 'Male',
     SDP_Branch__c: SF_BRANCH_ID,
     SDP_Cohort__c: SF_COHORT_ID
   };
@@ -160,22 +162,18 @@ app.get('/', (req, res) => {
   res.send(`
     <h2>ANN Server Integration</h2>
     <p>JWT-based Salesforce API server is running.</p>
-    <p>Available routes:</p>
     <ul>
       <li>GET /health</li>
+      <li>GET /debug-env</li>
+      <li>GET /test-jwt-token</li>
       <li>POST /create-bisd-learner</li>
-      <li>GET /test-create-bisd-learner</li>
-      <li>GET /query?objectName=OBJECT&fields=Id,Name&where=Name='Test'</li>
-      <li>GET /object/:objectName/:id</li>
+      <li>GET /test-create-bisd-learner?apiKey=YOUR_KEY</li>
     </ul>
   `);
 });
 
 // -------------------------------
 // Query Salesforce object records
-// Protected by API key
-// Example:
-// /query?objectName=SDP_Branch__c&fields=Id,Name&where=Name='Test'
 // -------------------------------
 app.get('/query', async (req, res) => {
   if (!validateApiKey(req, res)) return;
@@ -236,9 +234,6 @@ app.get('/query', async (req, res) => {
 
 // -------------------------------
 // Fetch a specific Salesforce object record by ID
-// Protected by API key
-// Example:
-// /object/SDP_Branch__c/a2t4H000000K1ap
 // -------------------------------
 app.get('/object/:objectName/:id', async (req, res) => {
   if (!validateApiKey(req, res)) return;
@@ -272,12 +267,6 @@ app.get('/object/:objectName/:id', async (req, res) => {
 
 // -------------------------------
 // Create BISD Learner from request body
-// Protected by API key
-// Body:
-// {
-//   "name": "Test Participant",
-//   "email": "test.abc@gmail.com"
-// }
 // -------------------------------
 app.post('/create-bisd-learner', async (req, res) => {
   if (!validateApiKey(req, res)) return;
@@ -293,8 +282,6 @@ app.post('/create-bisd-learner', async (req, res) => {
 
   try {
     const { access_token, instance_url } = await getSalesforceAccessToken();
-
-    access_token = SF_ACCESS_TOKEN;
     const learnerPayload = buildLearnerPayload(name, email, gender);
 
     const response = await axios.post(
@@ -327,9 +314,6 @@ app.post('/create-bisd-learner', async (req, res) => {
 
 // -------------------------------
 // Browser test route
-// Protected by API key in query string for quick test
-// Example:
-// /test-create-bisd-learner?apiKey=YOUR_KEY
 // -------------------------------
 app.get('/test-create-bisd-learner', async (req, res) => {
   const apiKey = req.query.apiKey;
@@ -343,8 +327,7 @@ app.get('/test-create-bisd-learner', async (req, res) => {
 
   try {
     const { access_token, instance_url } = await getSalesforceAccessToken();
-
-    const learnerPayload = buildLearnerPayload('Test Participant', 'test.abc@gmail.com');
+    const learnerPayload = buildLearnerPayload('Test Participant', 'test.abc@gmail.com', 'Male');
 
     const response = await axios.post(
       `${instance_url}/services/data/${SF_API_VERSION}/sobjects/BISD_Learners__c/`,
