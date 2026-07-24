@@ -8,7 +8,12 @@ import {
   MEMBER_STATUS,
   REGISTRATION_STATUS,
 } from "../constants/champions.js";
-import { loadCallerProfile, requireAuth, requirePermission } from "../middleware/auth.js";
+import {
+  loadCallerProfile,
+  requireAuth,
+  requirePermission,
+  requireSuperAdmin,
+} from "../middleware/auth.js";
 import { sendChampionActivationEmail } from "../email.js";
 import { createActivationToken, hashToken } from "../tokens.js";
 
@@ -335,6 +340,74 @@ router.post(
     } catch (err) {
       console.error("Activate champion failed:", err);
       return res.status(500).json({ error: "Failed to activate champion." });
+    }
+  }
+);
+
+router.patch(
+  "/:id",
+  requireAuth,
+  loadCallerProfile,
+  requireSuperAdmin,
+  async (req, res) => {
+    const { id } = req.params;
+    const { name, email, phone, date_of_birth, institution, address, role } =
+      req.body || {};
+
+    if (role !== undefined && !CHAMPION_ROLE_OPTIONS.includes(role)) {
+      return res.status(400).json({
+        error: `role must be one of: ${CHAMPION_ROLE_OPTIONS.join(", ")}`,
+      });
+    }
+
+    try {
+      const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(id);
+      const snap = await championRef.get();
+
+      if (!snap.exists) {
+        return res.status(404).json({ error: "Champion not found." });
+      }
+
+      const champion = snap.data();
+      const updates = { updated_at: FieldValue.serverTimestamp() };
+
+      if (name !== undefined) updates.name = String(name).trim();
+      if (phone !== undefined) updates.phone = String(phone).trim();
+      if (date_of_birth !== undefined) updates.date_of_birth = date_of_birth;
+      if (institution !== undefined) updates.institution = String(institution).trim();
+      if (address !== undefined) updates.address = String(address).trim();
+      if (role !== undefined) updates.role = role;
+
+      let normalizedEmail;
+
+      if (email !== undefined) {
+        normalizedEmail = String(email).trim().toLowerCase();
+        updates.email = normalizedEmail;
+      }
+
+      // Sync the Firebase Auth record's email BEFORE writing Firestore, so a
+      // rejected email change (e.g. already in use by another account)
+      // doesn't leave Firestore ahead of what the champion can actually log
+      // in with.
+      if (normalizedEmail && champion.firebase_uid) {
+        try {
+          await adminAuth.updateUser(champion.firebase_uid, {
+            email: normalizedEmail,
+          });
+        } catch (err) {
+          console.error("Failed to sync Auth email:", err);
+          return res.status(400).json({
+            error: "Failed to update email on the account. It may already be in use.",
+          });
+        }
+      }
+
+      await championRef.update(updates);
+
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error("Update champion failed:", err);
+      return res.status(500).json({ error: "Failed to update champion." });
     }
   }
 );

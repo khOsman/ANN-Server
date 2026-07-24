@@ -70,3 +70,11 @@ export function requirePermission(permissionKey) {
     return next();
   };
 }
+
+export function requireSuperAdmin(req, res, next) {
+  if (req.callerProfile?.role !== "super_admin") {
+    return res.status(403).json({ error: "Only a super admin can perform this action." });
+  }
+
+  return next();
+}
