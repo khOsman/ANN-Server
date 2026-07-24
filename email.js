@@ -1,24 +1,32 @@
-import { Resend } from "resend";
+import nodemailer from "nodemailer";
 
-let resendClient = null;
+let transporter = null;
 
-function getResendClient() {
-  if (!process.env.RESEND_API_KEY) {
-    throw new Error("RESEND_API_KEY environment variable is not set.");
+function getTransporter() {
+  const user = process.env.GMAIL_USER;
+  const pass = process.env.GMAIL_APP_PASSWORD;
+
+  if (!user || !pass) {
+    throw new Error(
+      "GMAIL_USER and GMAIL_APP_PASSWORD environment variables must be set."
+    );
   }
 
-  if (!resendClient) {
-    resendClient = new Resend(process.env.RESEND_API_KEY);
+  if (!transporter) {
+    transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user, pass },
+    });
   }
 
-  return resendClient;
+  return transporter;
 }
 
 export async function sendCommitteeActivationEmail({ to, name, activationUrl }) {
-  const from = process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev";
+  const from = process.env.GMAIL_USER;
 
-  const { error } = await getResendClient().emails.send({
-    from,
+  await getTransporter().sendMail({
+    from: `Amra Notun Network <${from}>`,
     to,
     subject: "Activate your Amra Notun Network Selection Committee account",
     html: `
@@ -34,8 +42,4 @@ export async function sendCommitteeActivationEmail({ to, name, activationUrl }) 
       <p>This link expires in 24 hours. If you didn't request this, you can ignore this email.</p>
     `,
   });
-
-  if (error) {
-    throw new Error(error.message || "Failed to send activation email.");
-  }
 }
