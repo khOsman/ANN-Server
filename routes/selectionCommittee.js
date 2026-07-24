@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { auth as adminAuth, db } from "../firebaseAdmin.js";
 import { COLLECTIONS } from "../constants/collections.js";
 import {
@@ -9,6 +9,8 @@ import {
   SELECTION_COMMITTEE_ROLE,
 } from "../constants/selectionCommittee.js";
 import { loadCallerProfile, requireAuth, requirePermission } from "../middleware/auth.js";
+import { sendCommitteeActivationEmail } from "../email.js";
+import { createActivationToken, hashToken } from "../tokens.js";
 
 const router = Router();
 
@@ -205,17 +207,127 @@ router.post(
         });
       }
 
+      // The account has no usable password yet — it only gets one once the
+      // member submits the activation form below. The emailed link points
+      // to our own activation page (a plain GET, safe for link-scanners to
+      // pre-visit) rather than a Firebase single-use action link, so an
+      // automated scanner can't burn the token before the real user clicks.
+      const { rawToken, tokenHash, expiresAt } = createActivationToken();
+
       await memberRef.update({
         firebase_uid: userRecord.uid,
         account_status: ACCOUNT_STATUS.INVITATION_SENT,
         invitation_sent_at: FieldValue.serverTimestamp(),
+        activation_token_hash: tokenHash,
+        activation_token_expires_at: Timestamp.fromDate(expiresAt),
         updated_at: FieldValue.serverTimestamp(),
+      });
+
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+      const activationUrl = `${frontendUrl}/committee/activate?id=${id}&token=${rawToken}`;
+
+      await sendCommitteeActivationEmail({
+        to: member.email,
+        name: member.name,
+        activationUrl,
       });
 
       return res.status(200).json({ success: true, uid: userRecord.uid, email: member.email });
     } catch (err) {
       console.error("Create committee account failed:", err);
       return res.status(500).json({ error: "Failed to create committee account." });
+    }
+  }
+);
+
+router.post("/:id/activate", async (req, res) => {
+  const { id } = req.params;
+  const { token, password } = req.body || {};
+
+  if (!token || !password) {
+    return res.status(400).json({ error: "token and password are required." });
+  }
+
+  if (String(password).length < 6) {
+    return res.status(400).json({ error: "Password must be at least 6 characters." });
+  }
+
+  try {
+    const memberRef = db.collection(COLLECTIONS.SELECTION_COMMITTEE_MEMBERS).doc(id);
+    const snap = await memberRef.get();
+
+    if (!snap.exists) {
+      return res.status(404).json({ error: "Committee member not found." });
+    }
+
+    const member = snap.data();
+    const expiresAt = member.activation_token_expires_at?.toDate?.();
+
+    const isValid =
+      member.activation_token_hash &&
+      member.activation_token_hash === hashToken(token) &&
+      expiresAt &&
+      expiresAt.getTime() > Date.now();
+
+    if (!isValid) {
+      return res.status(400).json({
+        error:
+          "This activation link is invalid or has expired. Ask an admin to resend your invitation.",
+      });
+    }
+
+    await adminAuth.updateUser(id, { password: String(password), emailVerified: true });
+
+    await memberRef.update({
+      account_status: ACCOUNT_STATUS.PASSWORD_SET,
+      password_set_at: FieldValue.serverTimestamp(),
+      activation_token_hash: FieldValue.delete(),
+      activation_token_expires_at: FieldValue.delete(),
+      updated_at: FieldValue.serverTimestamp(),
+    });
+
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.error("Activate committee account failed:", err);
+    return res.status(500).json({ error: "Failed to activate account." });
+  }
+});
+
+router.post(
+  "/:id/activate-member",
+  requireAuth,
+  loadCallerProfile,
+  requirePermission("selection"),
+  async (req, res) => {
+    const { id } = req.params;
+
+    try {
+      const memberRef = db.collection(COLLECTIONS.SELECTION_COMMITTEE_MEMBERS).doc(id);
+      const snap = await memberRef.get();
+
+      if (!snap.exists) {
+        return res.status(404).json({ error: "Committee member not found." });
+      }
+
+      const member = snap.data();
+
+      if (member.account_status !== ACCOUNT_STATUS.PASSWORD_SET) {
+        return res
+          .status(400)
+          .json({ error: "Member must set their password before activation." });
+      }
+
+      await memberRef.update({
+        member_status: MEMBER_STATUS.ACTIVE,
+        account_status: ACCOUNT_STATUS.ACTIVE,
+        activated_at: FieldValue.serverTimestamp(),
+        updated_at: FieldValue.serverTimestamp(),
+      });
+
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error("Activate committee member failed:", err);
+      return res.status(500).json({ error: "Failed to activate committee member." });
     }
   }
 );
