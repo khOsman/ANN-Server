@@ -14,6 +14,8 @@ export const REGISTRATION_STATUS = {
   REJECTED: "Rejected",
 };
 
+export const REGISTRATION_STATUS_OPTIONS = Object.values(REGISTRATION_STATUS);
+
 export const ACCOUNT_STATUS = {
   NOT_CREATED: "Not Created",
   INVITATION_SENT: "Invitation Sent",
@@ -21,8 +23,12 @@ export const ACCOUNT_STATUS = {
   ACTIVE: "Active",
 };
 
+export const ACCOUNT_STATUS_OPTIONS = Object.values(ACCOUNT_STATUS);
+
 export const MEMBER_STATUS = {
   INACTIVE: "Inactive",
   ACTIVE: "Active",
   SUSPENDED: "Suspended",
 };
+
+export const MEMBER_STATUS_OPTIONS = Object.values(MEMBER_STATUS);

@@ -4,9 +4,12 @@ import { auth as adminAuth, db } from "../firebaseAdmin.js";
 import { COLLECTIONS } from "../constants/collections.js";
 import {
   ACCOUNT_STATUS,
+  ACCOUNT_STATUS_OPTIONS,
   CHAMPION_ROLE_OPTIONS,
   MEMBER_STATUS,
+  MEMBER_STATUS_OPTIONS,
   REGISTRATION_STATUS,
+  REGISTRATION_STATUS_OPTIONS,
 } from "../constants/champions.js";
 import {
   loadCallerProfile,
@@ -351,12 +354,49 @@ router.patch(
   requireSuperAdmin,
   async (req, res) => {
     const { id } = req.params;
-    const { name, email, phone, date_of_birth, institution, address, role } =
-      req.body || {};
+    const {
+      name,
+      email,
+      phone,
+      date_of_birth,
+      institution,
+      address,
+      role,
+      registration_status,
+      account_status,
+      member_status,
+    } = req.body || {};
 
     if (role !== undefined && !CHAMPION_ROLE_OPTIONS.includes(role)) {
       return res.status(400).json({
         error: `role must be one of: ${CHAMPION_ROLE_OPTIONS.join(", ")}`,
+      });
+    }
+
+    if (
+      registration_status !== undefined &&
+      !REGISTRATION_STATUS_OPTIONS.includes(registration_status)
+    ) {
+      return res.status(400).json({
+        error: `registration_status must be one of: ${REGISTRATION_STATUS_OPTIONS.join(", ")}`,
+      });
+    }
+
+    if (
+      account_status !== undefined &&
+      !ACCOUNT_STATUS_OPTIONS.includes(account_status)
+    ) {
+      return res.status(400).json({
+        error: `account_status must be one of: ${ACCOUNT_STATUS_OPTIONS.join(", ")}`,
+      });
+    }
+
+    if (
+      member_status !== undefined &&
+      !MEMBER_STATUS_OPTIONS.includes(member_status)
+    ) {
+      return res.status(400).json({
+        error: `member_status must be one of: ${MEMBER_STATUS_OPTIONS.join(", ")}`,
       });
     }
 
@@ -377,6 +417,9 @@ router.patch(
       if (institution !== undefined) updates.institution = String(institution).trim();
       if (address !== undefined) updates.address = String(address).trim();
       if (role !== undefined) updates.role = role;
+      if (registration_status !== undefined) updates.registration_status = registration_status;
+      if (account_status !== undefined) updates.account_status = account_status;
+      if (member_status !== undefined) updates.member_status = member_status;
 
       let normalizedEmail;
 
