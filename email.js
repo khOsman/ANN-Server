@@ -1,8 +1,14 @@
+import { promises as dns } from "node:dns";
 import nodemailer from "nodemailer";
 
 let transporter = null;
 
-function getTransporter() {
+async function resolveIPv4(hostname) {
+  const { address } = await dns.lookup(hostname, { family: 4 });
+  return address;
+}
+
+async function getTransporter() {
   const user = process.env.GMAIL_USER;
   const pass = process.env.GMAIL_APP_PASSWORD;
 
@@ -13,12 +19,19 @@ function getTransporter() {
   }
 
   if (!transporter) {
+    // Render's network has no outbound IPv6 route, and neither nodemailer's
+    // `family` option nor Node's default DNS result order reliably kept
+    // the connection on IPv4 here. Resolving the address ourselves and
+    // connecting to the literal IP removes any ambiguity; `tls.servername`
+    // keeps TLS certificate validation working against the real hostname.
+    const ipv4Address = await resolveIPv4("smtp.gmail.com");
+
     transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
+      host: ipv4Address,
       port: 587,
       secure: false,
       requireTLS: true,
-      family: 4,
+      tls: { servername: "smtp.gmail.com" },
       auth: { user, pass },
     });
   }
@@ -28,8 +41,9 @@ function getTransporter() {
 
 export async function sendCommitteeActivationEmail({ to, name, activationUrl }) {
   const from = process.env.GMAIL_USER;
+  const transport = await getTransporter();
 
-  await getTransporter().sendMail({
+  await transport.sendMail({
     from: `Amra Notun Network <${from}>`,
     to,
     subject: "Activate your Amra Notun Network Selection Committee account",
