@@ -1,14 +1,7 @@
 import "dotenv/config";
-import { setDefaultResultOrder } from "node:dns";
 import cors from "cors";
 import express from "express";
 import selectionCommitteeRouter from "./routes/selectionCommittee.js";
-
-// Render's network has no outbound IPv6 route. Node 18+ defaults DNS lookups
-// to return whichever address family the OS resolver returns first, which
-// can be IPv6 even when only IPv4 is reachable (e.g. smtp.gmail.com). This
-// forces IPv4 results first for every outbound connection in this process.
-setDefaultResultOrder("ipv4first");
 
 const app = express();
 
