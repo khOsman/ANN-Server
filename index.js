@@ -1,7 +1,7 @@
 import "dotenv/config";
 import cors from "cors";
 import express from "express";
-import selectionCommitteeRouter from "./routes/selectionCommittee.js";
+import championsRouter from "./routes/champions.js";
 
 const app = express();
 
@@ -17,7 +17,7 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-app.use("/api/selection-committee", selectionCommitteeRouter);
+app.use("/api/champions", championsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });

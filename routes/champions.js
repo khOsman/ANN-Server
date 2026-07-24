@@ -4,20 +4,20 @@ import { auth as adminAuth, db } from "../firebaseAdmin.js";
 import { COLLECTIONS } from "../constants/collections.js";
 import {
   ACCOUNT_STATUS,
+  CHAMPION_ROLE_OPTIONS,
   MEMBER_STATUS,
   REGISTRATION_STATUS,
-  SELECTION_COMMITTEE_ROLE,
-} from "../constants/selectionCommittee.js";
+} from "../constants/champions.js";
 import { loadCallerProfile, requireAuth, requirePermission } from "../middleware/auth.js";
-import { sendCommitteeActivationEmail } from "../email.js";
+import { sendChampionActivationEmail } from "../email.js";
 import { createActivationToken, hashToken } from "../tokens.js";
 
 const router = Router();
 
-const COMMITTEE_COUNTER_DOC = "selection_committee_members";
+const CHAMPIONS_COUNTER_DOC = "champions_pool";
 
-async function nextCommitteeCode(transaction) {
-  const counterRef = db.collection(COLLECTIONS.COUNTERS).doc(COMMITTEE_COUNTER_DOC);
+async function nextChampionCode(transaction) {
+  const counterRef = db.collection(COLLECTIONS.COUNTERS).doc(CHAMPIONS_COUNTER_DOC);
   const counterSnap = await transaction.get(counterRef);
 
   let current = 0;
@@ -25,16 +25,16 @@ async function nextCommitteeCode(transaction) {
   if (counterSnap.exists) {
     current = Number(counterSnap.data().value) || 0;
   } else {
-    // First run: self-seed from any pre-existing committee_code values so
-    // migrating from the old client-side generator doesn't collide.
+    // First run: self-seed from any pre-existing champion_code values so
+    // this doesn't collide if the collection already has documents.
     const lastSnap = await transaction.get(
       db
-        .collection(COLLECTIONS.SELECTION_COMMITTEE_MEMBERS)
-        .orderBy("committee_code", "desc")
+        .collection(COLLECTIONS.CHAMPIONS_POOL)
+        .orderBy("champion_code", "desc")
         .limit(1)
     );
 
-    const lastCode = lastSnap.docs[0]?.data()?.committee_code;
+    const lastCode = lastSnap.docs[0]?.data()?.champion_code;
     const match = lastCode?.match(/(\d+)$/);
     current = match ? Number(match[1]) : 0;
   }
@@ -42,7 +42,7 @@ async function nextCommitteeCode(transaction) {
   const nextNumber = current + 1;
   transaction.set(counterRef, { value: nextNumber }, { merge: true });
 
-  return `ANN-SC-${String(nextNumber).padStart(4, "0")}`;
+  return `ANN-CH-${String(nextNumber).padStart(4, "0")}`;
 }
 
 router.post("/register", async (req, res) => {
@@ -55,15 +55,15 @@ router.post("/register", async (req, res) => {
   const normalizedEmail = String(email).trim().toLowerCase();
 
   try {
-    const member = await db.runTransaction(async (transaction) => {
-      const committeeCode = await nextCommitteeCode(transaction);
-      const memberRef = db.collection(COLLECTIONS.SELECTION_COMMITTEE_MEMBERS).doc();
+    const champion = await db.runTransaction(async (transaction) => {
+      const championCode = await nextChampionCode(transaction);
+      const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc();
       const now = FieldValue.serverTimestamp();
 
       const data = {
-        committee_code: committeeCode,
+        champion_code: championCode,
         firebase_uid: "",
-        role: SELECTION_COMMITTEE_ROLE.MEMBER,
+        role: "",
         registration_status: REGISTRATION_STATUS.PENDING,
         account_status: ACCOUNT_STATUS.NOT_CREATED,
         invitation_sent_at: null,
@@ -86,15 +86,15 @@ router.post("/register", async (req, res) => {
         updated_at: now,
       };
 
-      transaction.set(memberRef, data);
+      transaction.set(championRef, data);
 
-      return { id: memberRef.id, committee_code: committeeCode };
+      return { id: championRef.id, champion_code: championCode };
     });
 
-    return res.status(201).json(member);
+    return res.status(201).json(champion);
   } catch (err) {
-    console.error("Committee registration failed:", err);
-    return res.status(500).json({ error: "Failed to register committee member." });
+    console.error("Champion registration failed:", err);
+    return res.status(500).json({ error: "Failed to register." });
   }
 });
 
@@ -105,17 +105,25 @@ router.post(
   requirePermission("selection"),
   async (req, res) => {
     const { id } = req.params;
+    const { role } = req.body || {};
+
+    if (!role || !CHAMPION_ROLE_OPTIONS.includes(role)) {
+      return res.status(400).json({
+        error: `role is required and must be one of: ${CHAMPION_ROLE_OPTIONS.join(", ")}`,
+      });
+    }
 
     try {
-      const memberRef = db.collection(COLLECTIONS.SELECTION_COMMITTEE_MEMBERS).doc(id);
-      const snap = await memberRef.get();
+      const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(id);
+      const snap = await championRef.get();
 
       if (!snap.exists) {
-        return res.status(404).json({ error: "Committee member not found." });
+        return res.status(404).json({ error: "Champion not found." });
       }
 
-      await memberRef.update({
+      await championRef.update({
         registration_status: REGISTRATION_STATUS.APPROVED,
+        role,
         approved_by: req.callerProfile.email,
         approved_at: FieldValue.serverTimestamp(),
         updated_at: FieldValue.serverTimestamp(),
@@ -123,8 +131,8 @@ router.post(
 
       return res.status(200).json({ success: true });
     } catch (err) {
-      console.error("Approve committee member failed:", err);
-      return res.status(500).json({ error: "Failed to approve committee member." });
+      console.error("Approve champion failed:", err);
+      return res.status(500).json({ error: "Failed to approve champion." });
     }
   }
 );
@@ -143,14 +151,14 @@ router.post(
     }
 
     try {
-      const memberRef = db.collection(COLLECTIONS.SELECTION_COMMITTEE_MEMBERS).doc(id);
-      const snap = await memberRef.get();
+      const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(id);
+      const snap = await championRef.get();
 
       if (!snap.exists) {
-        return res.status(404).json({ error: "Committee member not found." });
+        return res.status(404).json({ error: "Champion not found." });
       }
 
-      await memberRef.update({
+      await championRef.update({
         registration_status: REGISTRATION_STATUS.REJECTED,
         rejected_by: req.callerProfile.email,
         rejected_at: FieldValue.serverTimestamp(),
@@ -160,8 +168,8 @@ router.post(
 
       return res.status(200).json({ success: true });
     } catch (err) {
-      console.error("Reject committee member failed:", err);
-      return res.status(500).json({ error: "Failed to reject committee member." });
+      console.error("Reject champion failed:", err);
+      return res.status(500).json({ error: "Failed to reject champion." });
     }
   }
 );
@@ -175,25 +183,24 @@ router.post(
     const { id } = req.params;
 
     try {
-      const memberRef = db.collection(COLLECTIONS.SELECTION_COMMITTEE_MEMBERS).doc(id);
-      const snap = await memberRef.get();
+      const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(id);
+      const snap = await championRef.get();
 
       if (!snap.exists) {
-        return res.status(404).json({ error: "Committee member not found." });
+        return res.status(404).json({ error: "Champion not found." });
       }
 
-      const member = snap.data();
+      const champion = snap.data();
 
-      if (member.registration_status !== REGISTRATION_STATUS.APPROVED) {
+      if (champion.registration_status !== REGISTRATION_STATUS.APPROVED) {
         return res
           .status(400)
-          .json({ error: "Member must be approved before creating an account." });
+          .json({ error: "Champion must be approved before creating an account." });
       }
 
       // uid is set to the Firestore doc id on purpose: firestore.rules
-      // looks up selection_committee_members/{request.auth.uid} to
-      // recognize an active committee member, so the Auth UID and the
-      // Firestore doc ID must match.
+      // looks up champions_pool/{request.auth.uid} to recognize an active
+      // champion, so the Auth UID and the Firestore doc ID must match.
       let userRecord;
 
       try {
@@ -201,20 +208,20 @@ router.post(
       } catch {
         userRecord = await adminAuth.createUser({
           uid: id,
-          email: member.email,
+          email: champion.email,
           emailVerified: false,
           disabled: false,
         });
       }
 
       // The account has no usable password yet — it only gets one once the
-      // member submits the activation form below. The emailed link points
+      // champion submits the activation form below. The emailed link points
       // to our own activation page (a plain GET, safe for link-scanners to
       // pre-visit) rather than a Firebase single-use action link, so an
       // automated scanner can't burn the token before the real user clicks.
       const { rawToken, tokenHash, expiresAt } = createActivationToken();
 
-      await memberRef.update({
+      await championRef.update({
         firebase_uid: userRecord.uid,
         account_status: ACCOUNT_STATUS.INVITATION_SENT,
         invitation_sent_at: FieldValue.serverTimestamp(),
@@ -224,18 +231,18 @@ router.post(
       });
 
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
-      const activationUrl = `${frontendUrl}/committee/activate?id=${id}&token=${rawToken}`;
+      const activationUrl = `${frontendUrl}/champions/activate?id=${id}&token=${rawToken}`;
 
-      await sendCommitteeActivationEmail({
-        to: member.email,
-        name: member.name,
+      await sendChampionActivationEmail({
+        to: champion.email,
+        name: champion.name,
         activationUrl,
       });
 
-      return res.status(200).json({ success: true, uid: userRecord.uid, email: member.email });
+      return res.status(200).json({ success: true, uid: userRecord.uid, email: champion.email });
     } catch (err) {
-      console.error("Create committee account failed:", err);
-      return res.status(500).json({ error: "Failed to create committee account." });
+      console.error("Create champion account failed:", err);
+      return res.status(500).json({ error: "Failed to create account." });
     }
   }
 );
@@ -253,19 +260,19 @@ router.post("/:id/activate", async (req, res) => {
   }
 
   try {
-    const memberRef = db.collection(COLLECTIONS.SELECTION_COMMITTEE_MEMBERS).doc(id);
-    const snap = await memberRef.get();
+    const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(id);
+    const snap = await championRef.get();
 
     if (!snap.exists) {
-      return res.status(404).json({ error: "Committee member not found." });
+      return res.status(404).json({ error: "Champion not found." });
     }
 
-    const member = snap.data();
-    const expiresAt = member.activation_token_expires_at?.toDate?.();
+    const champion = snap.data();
+    const expiresAt = champion.activation_token_expires_at?.toDate?.();
 
     const isValid =
-      member.activation_token_hash &&
-      member.activation_token_hash === hashToken(token) &&
+      champion.activation_token_hash &&
+      champion.activation_token_hash === hashToken(token) &&
       expiresAt &&
       expiresAt.getTime() > Date.now();
 
@@ -278,7 +285,7 @@ router.post("/:id/activate", async (req, res) => {
 
     await adminAuth.updateUser(id, { password: String(password), emailVerified: true });
 
-    await memberRef.update({
+    await championRef.update({
       account_status: ACCOUNT_STATUS.PASSWORD_SET,
       password_set_at: FieldValue.serverTimestamp(),
       activation_token_hash: FieldValue.delete(),
@@ -288,7 +295,7 @@ router.post("/:id/activate", async (req, res) => {
 
     return res.status(200).json({ success: true });
   } catch (err) {
-    console.error("Activate committee account failed:", err);
+    console.error("Activate champion account failed:", err);
     return res.status(500).json({ error: "Failed to activate account." });
   }
 });
@@ -302,22 +309,22 @@ router.post(
     const { id } = req.params;
 
     try {
-      const memberRef = db.collection(COLLECTIONS.SELECTION_COMMITTEE_MEMBERS).doc(id);
-      const snap = await memberRef.get();
+      const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(id);
+      const snap = await championRef.get();
 
       if (!snap.exists) {
-        return res.status(404).json({ error: "Committee member not found." });
+        return res.status(404).json({ error: "Champion not found." });
       }
 
-      const member = snap.data();
+      const champion = snap.data();
 
-      if (member.account_status !== ACCOUNT_STATUS.PASSWORD_SET) {
+      if (champion.account_status !== ACCOUNT_STATUS.PASSWORD_SET) {
         return res
           .status(400)
-          .json({ error: "Member must set their password before activation." });
+          .json({ error: "Champion must set their password before activation." });
       }
 
-      await memberRef.update({
+      await championRef.update({
         member_status: MEMBER_STATUS.ACTIVE,
         account_status: ACCOUNT_STATUS.ACTIVE,
         activated_at: FieldValue.serverTimestamp(),
@@ -326,8 +333,8 @@ router.post(
 
       return res.status(200).json({ success: true });
     } catch (err) {
-      console.error("Activate committee member failed:", err);
-      return res.status(500).json({ error: "Failed to activate committee member." });
+      console.error("Activate champion failed:", err);
+      return res.status(500).json({ error: "Failed to activate champion." });
     }
   }
 );
