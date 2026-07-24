@@ -1,0 +1,19 @@
+{
+  "name": "ann-mis-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ANN MIS backend API — trusted Firebase Admin SDK operations (account provisioning, approvals) for the ann-mis-web frontend.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node --watch index.js",
+    "start": "node index.js"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "firebase-admin": "^14.2.0"
+  }
+}
