@@ -2,6 +2,7 @@ import "dotenv/config";
 import cors from "cors";
 import express from "express";
 import championsRouter from "./routes/champions.js";
+import championPortalRouter from "./routes/championPortal.js";
 
 const app = express();
 
@@ -18,6 +19,7 @@ app.get("/health", (req, res) => {
 });
 
 app.use("/api/champions", championsRouter);
+app.use("/api/me", championPortalRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });

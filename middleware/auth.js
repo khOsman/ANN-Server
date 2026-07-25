@@ -78,3 +78,31 @@ export function requireSuperAdmin(req, res, next) {
 
   return next();
 }
+
+export async function requireActiveChampion(req, res, next) {
+  const uid = req.authUser?.uid;
+
+  if (!uid) {
+    return res.status(401).json({ error: "Missing authenticated user." });
+  }
+
+  try {
+    const snap = await db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(uid).get();
+
+    if (!snap.exists) {
+      return res.status(403).json({ error: "No champion profile found." });
+    }
+
+    const champion = snap.data();
+
+    if (champion.member_status !== "Active" || champion.account_status !== "Active") {
+      return res.status(403).json({ error: "Champion account is not active." });
+    }
+
+    req.champion = { id: snap.id, ...champion };
+    return next();
+  } catch (err) {
+    console.error("Failed to load champion profile:", err);
+    return res.status(500).json({ error: "Failed to verify champion." });
+  }
+}

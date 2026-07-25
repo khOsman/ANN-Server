@@ -601,4 +601,41 @@ router.post(
   }
 );
 
+router.post(
+  "/fgd-change-requests/:id/resolve",
+  requireAuth,
+  loadCallerProfile,
+  requirePermission("selection"),
+  async (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body || {};
+
+    if (!["Approved", "Dismissed"].includes(status)) {
+      return res
+        .status(400)
+        .json({ error: "status must be one of: Approved, Dismissed" });
+    }
+
+    try {
+      const requestRef = db.collection(COLLECTIONS.FGD_CHANGE_REQUESTS).doc(id);
+      const snap = await requestRef.get();
+
+      if (!snap.exists) {
+        return res.status(404).json({ error: "Request not found." });
+      }
+
+      await requestRef.update({
+        status,
+        resolved_at: FieldValue.serverTimestamp(),
+        resolved_by: req.callerProfile.email,
+      });
+
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error("Resolve FGD change request failed:", err);
+      return res.status(500).json({ error: "Failed to resolve request." });
+    }
+  }
+);
+
 export default router;
