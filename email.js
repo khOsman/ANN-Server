@@ -11,6 +11,33 @@ function ensureHttpUrl(url) {
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
+// Stored as plain "HH:mm" (24-hour). Display-only conversion to 12-hour BDT.
+function formatTime12h(time24) {
+  if (!time24) return "";
+
+  const [hourStr, minuteStr] = String(time24).split(":");
+  const hour24 = parseInt(hourStr, 10);
+
+  if (Number.isNaN(hour24)) return time24;
+
+  const minute = (minuteStr || "00").padStart(2, "0");
+  const period = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+
+  return `${hour12}:${minute} ${period}`;
+}
+
+function formatTimeRangeBDT(startTime24, endTime24) {
+  const start = formatTime12h(startTime24);
+  const end = formatTime12h(endTime24);
+
+  if (!start && !end) return "";
+
+  const range = start && end ? `${start} - ${end}` : start || end;
+
+  return `${range} BDT`;
+}
+
 async function sendViaBrevo({ to, name, subject, htmlContent }) {
   const apiKey = process.env.BREVO_API_KEY;
   const senderEmail = process.env.BREVO_SENDER_EMAIL;
@@ -64,13 +91,11 @@ export async function sendChampionActivationEmail({ to, name, activationUrl }) {
 }
 
 export async function sendFGDAssignmentEmail({ to, name, fgd }) {
+  const timeRange = formatTimeRangeBDT(fgd.session_start_time, fgd.session_end_time);
+
   const scheduleLine = fgd.session_date
     ? `<p><strong>Date:</strong> ${fgd.session_date}${
-        fgd.session_start_time
-          ? ` &nbsp; <strong>Time:</strong> ${fgd.session_start_time}${
-              fgd.session_end_time ? ` - ${fgd.session_end_time}` : ""
-            }`
-          : ""
+        timeRange ? ` &nbsp; <strong>Time:</strong> ${timeRange}` : ""
       }</p>`
     : `<p><em>The exact schedule is still being finalized — you'll be notified once it's confirmed.</em></p>`;
 
