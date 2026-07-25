@@ -1,5 +1,16 @@
 const BREVO_API_URL = "https://api.brevo.com/v3/smtp/email";
 
+// Admins sometimes paste links without a scheme (e.g. "meet.google.com/xxx").
+// Left as-is in an <a href>, mail clients can resolve that as relative,
+// producing a broken link instead of opening Google Meet directly.
+function ensureHttpUrl(url) {
+  if (!url) return url;
+
+  const trimmed = String(url).trim();
+
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
 async function sendViaBrevo({ to, name, subject, htmlContent }) {
   const apiKey = process.env.BREVO_API_KEY;
   const senderEmail = process.env.BREVO_SENDER_EMAIL;
@@ -67,7 +78,7 @@ export async function sendFGDAssignmentEmail({ to, name, fgd }) {
 
   const meetLine = fgd.meet_link
     ? `<p>
-        <a href="${fgd.meet_link}"
+        <a href="${ensureHttpUrl(fgd.meet_link)}"
            style="background:#e6007e;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block;">
           Join Google Meet
         </a>
