@@ -293,8 +293,17 @@ router.post("/:id/activate", async (req, res) => {
 
     await adminAuth.updateUser(id, { password: String(password), emailVerified: true });
 
+    // A champion whose member_status is already Active is resetting a
+    // forgotten password, not onboarding for the first time — go straight
+    // back to Active instead of leaving them stuck on Password Set with no
+    // "Activate Champion" button to recover from (that button only appears
+    // for member_status Inactive).
+    const isPasswordReset = champion.member_status === MEMBER_STATUS.ACTIVE;
+
     await championRef.update({
-      account_status: ACCOUNT_STATUS.PASSWORD_SET,
+      account_status: isPasswordReset
+        ? ACCOUNT_STATUS.ACTIVE
+        : ACCOUNT_STATUS.PASSWORD_SET,
       password_set_at: FieldValue.serverTimestamp(),
       activation_token_hash: FieldValue.delete(),
       activation_token_expires_at: FieldValue.delete(),
