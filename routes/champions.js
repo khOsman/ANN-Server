@@ -17,7 +17,7 @@ import {
   requirePermission,
   requireSuperAdmin,
 } from "../middleware/auth.js";
-import { sendChampionActivationEmail } from "../email.js";
+import { sendChampionActivationEmail, sendFGDAssignmentEmail } from "../email.js";
 import { createActivationToken, hashToken } from "../tokens.js";
 
 const router = Router();
@@ -451,6 +451,152 @@ router.patch(
     } catch (err) {
       console.error("Update champion failed:", err);
       return res.status(500).json({ error: "Failed to update champion." });
+    }
+  }
+);
+
+router.post(
+  "/:id/assign-fgd",
+  requireAuth,
+  loadCallerProfile,
+  requirePermission("selection"),
+  async (req, res) => {
+    const { id } = req.params;
+    const { fgdId } = req.body || {};
+
+    if (!fgdId) {
+      return res.status(400).json({ error: "fgdId is required." });
+    }
+
+    try {
+      const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(id);
+      const fgdRef = db.collection(COLLECTIONS.FGDS).doc(fgdId);
+
+      const [championSnap, fgdSnap] = await Promise.all([
+        championRef.get(),
+        fgdRef.get(),
+      ]);
+
+      if (!championSnap.exists) {
+        return res.status(404).json({ error: "Champion not found." });
+      }
+
+      if (!fgdSnap.exists) {
+        return res.status(404).json({ error: "FGD not found." });
+      }
+
+      const champion = championSnap.data();
+      const fgd = fgdSnap.data();
+
+      const assignedFgdsById = new Map(
+        (champion.assigned_fgds || []).map((item) => [item.fgd_id, item])
+      );
+
+      assignedFgdsById.set(fgdId, {
+        fgd_id: fgdId,
+        fgd_code: fgd.fgd_code || "",
+        fgd_name: fgd.fgd_name || "",
+        cohort_name: fgd.cohort_name || "",
+        session_date: fgd.session_date || "",
+        session_start_time: fgd.session_start_time || "",
+        session_end_time: fgd.session_end_time || "",
+        venue: fgd.venue || "",
+        meet_link: fgd.meet_link || "",
+      });
+
+      const assignedFgds = Array.from(assignedFgdsById.values());
+      const assignedFgdIds = assignedFgds.map((item) => item.fgd_id);
+
+      const committeeMembersById = new Map(
+        (fgd.committee_members || []).map((item) => [item.champion_id, item])
+      );
+
+      committeeMembersById.set(id, {
+        champion_id: id,
+        name: champion.name || "",
+        email: champion.email || "",
+      });
+
+      await Promise.all([
+        championRef.update({
+          assigned_fgd_ids: assignedFgdIds,
+          assigned_fgds: assignedFgds,
+          assigned_fgd_count: assignedFgdIds.length,
+          updated_at: FieldValue.serverTimestamp(),
+        }),
+        fgdRef.update({
+          committee_members: Array.from(committeeMembersById.values()),
+          updated_at: FieldValue.serverTimestamp(),
+        }),
+      ]);
+
+      await sendFGDAssignmentEmail({
+        to: champion.email,
+        name: champion.name,
+        fgd: { ...fgd, id: fgdId },
+      });
+
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error("Assign champion to FGD failed:", err);
+      return res.status(500).json({ error: "Failed to assign champion to FGD." });
+    }
+  }
+);
+
+router.post(
+  "/:id/unassign-fgd",
+  requireAuth,
+  loadCallerProfile,
+  requirePermission("selection"),
+  async (req, res) => {
+    const { id } = req.params;
+    const { fgdId } = req.body || {};
+
+    if (!fgdId) {
+      return res.status(400).json({ error: "fgdId is required." });
+    }
+
+    try {
+      const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(id);
+      const fgdRef = db.collection(COLLECTIONS.FGDS).doc(fgdId);
+
+      const [championSnap, fgdSnap] = await Promise.all([
+        championRef.get(),
+        fgdRef.get(),
+      ]);
+
+      if (!championSnap.exists) {
+        return res.status(404).json({ error: "Champion not found." });
+      }
+
+      const champion = championSnap.data();
+      const assignedFgds = (champion.assigned_fgds || []).filter(
+        (item) => item.fgd_id !== fgdId
+      );
+
+      await championRef.update({
+        assigned_fgds: assignedFgds,
+        assigned_fgd_ids: assignedFgds.map((item) => item.fgd_id),
+        assigned_fgd_count: assignedFgds.length,
+        updated_at: FieldValue.serverTimestamp(),
+      });
+
+      if (fgdSnap.exists) {
+        const fgd = fgdSnap.data();
+
+        await fgdRef.update({
+          committee_members: (fgd.committee_members || []).filter(
+            (item) => item.champion_id !== id
+          ),
+          updated_at: FieldValue.serverTimestamp(),
+        });
+      }
+
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error("Unassign champion from FGD failed:", err);
+      return res.status(500).json({ error: "Failed to unassign champion from FGD." });
     }
   }
 );
