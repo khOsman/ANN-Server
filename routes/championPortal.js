@@ -10,12 +10,97 @@ import {
   computeEvaluatorScore,
   deriveSelectionStatus,
 } from "../constants/evaluation.js";
+import { GENDER_OPTIONS, EDUCATION_LEVEL_OPTIONS } from "../constants/champions.js";
 
 const router = Router();
 
 const ATTENDANCE_OPTIONS = ["Pending", "Present", "Absent"];
 
+const PROFILE_TEXT_FIELDS = [
+  "name",
+  "phone",
+  "date_of_birth",
+  "address",
+  "photo_url",
+  "education_institution",
+  "field_of_study",
+  "current_organization",
+  "designation",
+  "linkedin_url",
+];
+
 router.use(requireAuth, requireActiveChampion);
+
+router.patch("/profile", async (req, res) => {
+  const body = req.body || {};
+  const updates = { updated_at: FieldValue.serverTimestamp() };
+
+  for (const field of PROFILE_TEXT_FIELDS) {
+    if (body[field] !== undefined) {
+      updates[field] = String(body[field]).trim();
+    }
+  }
+
+  if (body.gender !== undefined) {
+    if (body.gender !== "" && !GENDER_OPTIONS.includes(body.gender)) {
+      return res.status(400).json({
+        error: `gender must be one of: ${GENDER_OPTIONS.join(", ")}`,
+      });
+    }
+    updates.gender = body.gender;
+  }
+
+  if (body.education_level !== undefined) {
+    if (
+      body.education_level !== "" &&
+      !EDUCATION_LEVEL_OPTIONS.includes(body.education_level)
+    ) {
+      return res.status(400).json({
+        error: `education_level must be one of: ${EDUCATION_LEVEL_OPTIONS.join(", ")}`,
+      });
+    }
+    updates.education_level = body.education_level;
+  }
+
+  if (body.graduation_year !== undefined) {
+    if (body.graduation_year === "") {
+      updates.graduation_year = "";
+    } else {
+      const year = Number(body.graduation_year);
+      const currentYear = new Date().getFullYear();
+
+      if (!Number.isInteger(year) || year < 1950 || year > currentYear + 1) {
+        return res.status(400).json({
+          error: `graduation_year must be a year between 1950 and ${currentYear + 1}.`,
+        });
+      }
+      updates.graduation_year = year;
+    }
+  }
+
+  if (body.years_of_experience !== undefined) {
+    if (body.years_of_experience === "") {
+      updates.years_of_experience = "";
+    } else {
+      const years = Number(body.years_of_experience);
+
+      if (Number.isNaN(years) || years < 0 || years > 60) {
+        return res.status(400).json({
+          error: "years_of_experience must be a number between 0 and 60.",
+        });
+      }
+      updates.years_of_experience = years;
+    }
+  }
+
+  try {
+    await db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(req.champion.id).update(updates);
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.error("Update champion profile failed:", err);
+    return res.status(500).json({ error: "Failed to update profile." });
+  }
+});
 
 router.post("/fgds/:fgdId/request-change", async (req, res) => {
   const { fgdId } = req.params;
