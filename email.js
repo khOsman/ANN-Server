@@ -90,6 +90,40 @@ export async function sendChampionActivationEmail({ to, name, activationUrl }) {
   });
 }
 
+const ROLE_LABELS = {
+  super_admin: "Super Admin",
+  admin: "Admin",
+  viewer: "Viewer",
+  pending: "Pending",
+};
+
+export async function sendUserAccessUpdateEmail({ to, name, role, permissions }) {
+  const roleLabel = ROLE_LABELS[role] || role || "Unassigned";
+
+  const enabledFeatures = Object.entries(permissions || {})
+    .filter(([, enabled]) => enabled)
+    .map(([key]) => key.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase()));
+
+  const featuresList =
+    enabledFeatures.length > 0
+      ? `<ul>${enabledFeatures.map((feature) => `<li>${feature}</li>`).join("")}</ul>`
+      : "<p>No feature access has been enabled.</p>";
+
+  await sendViaBrevo({
+    to,
+    name,
+    subject: "Your Amra Notun Network MIS access has been updated",
+    htmlContent: `
+      <p>Hi ${name},</p>
+      <p>Your access to the Amra Notun Network MIS has been updated by an administrator.</p>
+      <p><strong>Role:</strong> ${roleLabel}</p>
+      <p><strong>Feature Access:</strong></p>
+      ${featuresList}
+      <p>If you have any questions about this change, please reach out to your system administrator.</p>
+    `,
+  });
+}
+
 export async function sendFGDAssignmentEmail({ to, name, fgd }) {
   const timeRange = formatTimeRangeBDT(fgd.session_start_time, fgd.session_end_time);
 
