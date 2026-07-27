@@ -10,7 +10,8 @@ import {
   computeEvaluatorScore,
   deriveSelectionStatus,
 } from "../constants/evaluation.js";
-import { GENDER_OPTIONS, EDUCATION_LEVEL_OPTIONS } from "../constants/champions.js";
+import { GENDER_OPTIONS, EDUCATION_LEVEL_OPTIONS, CHAMPION_ROLES } from "../constants/champions.js";
+import { buildFgdAssignmentUpdates, FGD_ROSTER_CAP } from "../services/fgdAssignment.js";
 
 const router = Router();
 
@@ -137,6 +138,63 @@ router.post("/fgds/:fgdId/request-change", async (req, res) => {
   } catch (err) {
     console.error("Create FGD change request failed:", err);
     return res.status(500).json({ error: "Failed to submit request." });
+  }
+});
+
+router.post("/fgds/:fgdId/book", async (req, res) => {
+  const { fgdId } = req.params;
+
+  if (req.champion.role !== CHAMPION_ROLES.SELECTION_COMMITTEE) {
+    return res
+      .status(403)
+      .json({ error: "Only Selection Committee members can book FGD slots." });
+  }
+
+  try {
+    const fgdRef = db.collection(COLLECTIONS.FGDS).doc(fgdId);
+    const fgdSnap = await fgdRef.get();
+
+    if (!fgdSnap.exists) {
+      return res.status(404).json({ error: "FGD not found." });
+    }
+
+    const fgd = fgdSnap.data();
+    const committeeMembers = fgd.committee_members || [];
+
+    if (committeeMembers.some((member) => member.champion_id === req.champion.id)) {
+      return res.status(400).json({ error: "You already have a slot in this FGD." });
+    }
+
+    if (committeeMembers.length >= FGD_ROSTER_CAP) {
+      return res.status(409).json({ error: "This FGD's roster is already full." });
+    }
+
+    const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(req.champion.id);
+
+    const { championUpdates, fgdUpdates } = buildFgdAssignmentUpdates({
+      championId: req.champion.id,
+      champion: req.champion,
+      fgdId,
+      fgd,
+    });
+
+    // Self-booking is a routine slot pick, not an admin decision — no
+    // notification email (unlike the admin assign-fgd endpoint).
+    await Promise.all([
+      championRef.update({
+        ...championUpdates,
+        updated_at: FieldValue.serverTimestamp(),
+      }),
+      fgdRef.update({
+        ...fgdUpdates,
+        updated_at: FieldValue.serverTimestamp(),
+      }),
+    ]);
+
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.error("Book FGD slot failed:", err);
+    return res.status(500).json({ error: "Failed to book this slot." });
   }
 });
 
