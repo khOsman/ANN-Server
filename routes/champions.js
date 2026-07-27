@@ -54,9 +54,9 @@ async function nextChampionCode(transaction) {
 }
 
 router.post("/register", async (req, res) => {
-  const { email, name, phone, date_of_birth, institution, address } = req.body || {};
+  const { email, name, phone, date_of_birth, gender, institution, address } = req.body || {};
 
-  if (!email || !name || !phone || !institution || !address) {
+  if (!email || !name || !phone || !gender || !institution || !address) {
     return res.status(400).json({ error: "Missing required fields." });
   }
 
@@ -82,6 +82,7 @@ router.post("/register", async (req, res) => {
         email: normalizedEmail,
         phone: String(phone).trim(),
         date_of_birth: date_of_birth || "",
+        gender: String(gender).trim(),
         institution: String(institution).trim(),
         address: String(address).trim(),
         photo_url: "",
