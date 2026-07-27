@@ -1,3 +1,5 @@
+import { COLLECTIONS } from "../constants/collections.js";
+
 export const FGD_ROSTER_CAP = 3;
 
 // Shared by the admin assign-fgd endpoint and the selection committee's
@@ -44,4 +46,40 @@ export function buildFgdAssignmentUpdates({ championId, champion, fgdId, fgd }) 
       committee_members: Array.from(committeeMembersById.values()),
     },
   };
+}
+
+// A champion's name/email are denormalized onto the committee_members[]
+// entry of every FGD they're assigned to (see buildFgdAssignmentUpdates
+// above) — no Firestore triggers exist here to keep those copies in sync,
+// so a profile edit that actually changes one of those fields has to fan
+// out to each assigned FGD explicitly.
+export async function syncChampionAcrossAssignedFgds({
+  db,
+  FieldValue,
+  championId,
+  assignedFgdIds,
+  fields,
+}) {
+  if (!assignedFgdIds?.length || !fields || Object.keys(fields).length === 0) {
+    return;
+  }
+
+  await Promise.all(
+    assignedFgdIds.map(async (fgdId) => {
+      const fgdRef = db.collection(COLLECTIONS.FGDS).doc(fgdId);
+      const snap = await fgdRef.get();
+
+      if (!snap.exists) return;
+
+      const fgd = snap.data();
+      const committeeMembers = (fgd.committee_members || []).map((member) =>
+        member.champion_id === championId ? { ...member, ...fields } : member
+      );
+
+      await fgdRef.update({
+        committee_members: committeeMembers,
+        updated_at: FieldValue.serverTimestamp(),
+      });
+    })
+  );
 }

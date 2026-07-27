@@ -19,7 +19,10 @@ import {
 } from "../middleware/auth.js";
 import { sendChampionActivationEmail, sendFGDAssignmentEmail } from "../email.js";
 import { createActivationToken, hashToken } from "../tokens.js";
-import { buildFgdAssignmentUpdates } from "../services/fgdAssignment.js";
+import {
+  buildFgdAssignmentUpdates,
+  syncChampionAcrossAssignedFgds,
+} from "../services/fgdAssignment.js";
 
 const router = Router();
 
@@ -457,6 +460,27 @@ router.patch(
       }
 
       await championRef.update(updates);
+
+      // name/email are denormalized onto committee_members[] on every FGD
+      // this champion is assigned to — fan out only the fields that
+      // actually changed, no Firestore triggers exist to do this for us.
+      const fgdSyncFields = {};
+      if (updates.name !== undefined && updates.name !== champion.name) {
+        fgdSyncFields.name = updates.name;
+      }
+      if (normalizedEmail && normalizedEmail !== champion.email) {
+        fgdSyncFields.email = normalizedEmail;
+      }
+
+      if (Object.keys(fgdSyncFields).length > 0) {
+        await syncChampionAcrossAssignedFgds({
+          db,
+          FieldValue,
+          championId: id,
+          assignedFgdIds: champion.assigned_fgd_ids,
+          fields: fgdSyncFields,
+        });
+      }
 
       return res.status(200).json({ success: true });
     } catch (err) {

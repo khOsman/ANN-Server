@@ -7,11 +7,16 @@ import {
   FEEDBACK_OPTIONS,
   RECOMMENDATION_OPTIONS,
   REQUIRED_EVALUATIONS,
+  SELECTION_STATUS,
   computeEvaluatorScore,
   deriveSelectionStatus,
 } from "../constants/evaluation.js";
 import { GENDER_OPTIONS, EDUCATION_LEVEL_OPTIONS, CHAMPION_ROLES } from "../constants/champions.js";
-import { buildFgdAssignmentUpdates, FGD_ROSTER_CAP } from "../services/fgdAssignment.js";
+import {
+  buildFgdAssignmentUpdates,
+  syncChampionAcrossAssignedFgds,
+  FGD_ROSTER_CAP,
+} from "../services/fgdAssignment.js";
 
 const router = Router();
 
@@ -96,6 +101,19 @@ router.patch("/profile", async (req, res) => {
 
   try {
     await db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(req.champion.id).update(updates);
+
+    // Self-service profile has no email field, so name is the only thing
+    // that can go stale on committee_members[] via this endpoint.
+    if (updates.name !== undefined && updates.name !== req.champion.name) {
+      await syncChampionAcrossAssignedFgds({
+        db,
+        FieldValue,
+        championId: req.champion.id,
+        assignedFgdIds: req.champion.assigned_fgd_ids,
+        fields: { name: updates.name },
+      });
+    }
+
     return res.status(200).json({ success: true });
   } catch (err) {
     console.error("Update champion profile failed:", err);
@@ -339,6 +357,23 @@ router.post("/participants/:participantId/evaluate", async (req, res) => {
     }
 
     await participantRef.update(participantUpdates);
+
+    // cohort.total_selected has no Firestore trigger keeping it in sync —
+    // recomputed from the source of truth (a count query) rather than
+    // incremented/decremented, since selection_status can move between
+    // Selected/Waitlisted/Rejected in either direction as evaluations land.
+    if (participantUpdates.selection_status && participant.cohort_id) {
+      const selectedSnap = await db
+        .collection(COLLECTIONS.PARTICIPANTS)
+        .where("cohort_id", "==", participant.cohort_id)
+        .where("selection_status", "==", SELECTION_STATUS.SELECTED)
+        .get();
+
+      await db.collection(COLLECTIONS.COHORTS).doc(participant.cohort_id).update({
+        total_selected: selectedSnap.size,
+        updated_at: FieldValue.serverTimestamp(),
+      });
+    }
 
     return res.status(200).json({
       success: true,

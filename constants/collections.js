@@ -2,6 +2,7 @@ export const COLLECTIONS = {
   USERS: "users",
   CHAMPIONS_POOL: "champions_pool",
   COUNTERS: "counters",
+  COHORTS: "cohorts",
   FGDS: "fgds",
   PARTICIPANTS: "participants",
   PARTICIPANT_EVALUATIONS: "participant_evaluations",
