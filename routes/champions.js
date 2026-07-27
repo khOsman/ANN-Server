@@ -465,6 +465,51 @@ router.patch(
   }
 );
 
+router.delete(
+  "/:id",
+  requireAuth,
+  loadCallerProfile,
+  requireSuperAdmin,
+  async (req, res) => {
+    const { id } = req.params;
+
+    try {
+      const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(id);
+      const snap = await championRef.get();
+
+      if (!snap.exists) {
+        return res.status(404).json({ error: "Champion not found." });
+      }
+
+      const champion = snap.data();
+
+      // The Auth UID is set equal to the Firestore doc ID (see
+      // create-account above), so a champion who ever had an account
+      // created has a login even if they never finished activating it —
+      // remove that too, not just the Firestore record.
+      if (champion.firebase_uid) {
+        try {
+          await adminAuth.deleteUser(champion.firebase_uid);
+        } catch (err) {
+          if (err.code !== "auth/user-not-found") {
+            console.error("Failed to delete champion's Auth account:", err);
+            return res.status(500).json({
+              error: "Failed to delete the associated login account. Try again.",
+            });
+          }
+        }
+      }
+
+      await championRef.delete();
+
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error("Delete champion failed:", err);
+      return res.status(500).json({ error: "Failed to delete champion." });
+    }
+  }
+);
+
 router.post(
   "/:id/assign-fgd",
   requireAuth,
