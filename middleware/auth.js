@@ -71,6 +71,27 @@ export function requirePermission(permissionKey) {
   };
 }
 
+export function requireAnyPermission(permissionKeys) {
+  return (req, res, next) => {
+    const profile = req.callerProfile;
+
+    if (!profile) {
+      return res.status(403).json({ error: "Caller profile not loaded." });
+    }
+
+    const isSuperAdmin = profile.role === "super_admin";
+    const hasAny = permissionKeys.some((key) => profile.permissions?.[key] === true);
+
+    if (!isSuperAdmin && !hasAny) {
+      return res.status(403).json({
+        error: `Missing required permission: one of ${permissionKeys.join(", ")}`,
+      });
+    }
+
+    return next();
+  };
+}
+
 export function requireAdmin(req, res, next) {
   const role = req.callerProfile?.role;
 

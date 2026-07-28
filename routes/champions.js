@@ -14,6 +14,7 @@ import {
 import {
   loadCallerProfile,
   requireAuth,
+  requireAnyPermission,
   requirePermission,
   requireSuperAdmin,
 } from "../middleware/auth.js";
@@ -115,7 +116,7 @@ router.post(
   "/:id/approve",
   requireAuth,
   loadCallerProfile,
-  requirePermission("selection"),
+  requirePermission("champions"),
   async (req, res) => {
     const { id } = req.params;
     const { role } = req.body || {};
@@ -154,7 +155,7 @@ router.post(
   "/:id/reject",
   requireAuth,
   loadCallerProfile,
-  requirePermission("selection"),
+  requirePermission("champions"),
   async (req, res) => {
     const { id } = req.params;
     const { rejectionReason } = req.body || {};
@@ -191,7 +192,7 @@ router.post(
   "/:id/create-account",
   requireAuth,
   loadCallerProfile,
-  requirePermission("selection"),
+  requirePermission("champions"),
   async (req, res) => {
     const { id } = req.params;
 
@@ -326,7 +327,7 @@ router.post(
   "/:id/activate-member",
   requireAuth,
   loadCallerProfile,
-  requirePermission("selection"),
+  requirePermission("champions"),
   async (req, res) => {
     const { id } = req.params;
 
@@ -539,7 +540,7 @@ router.post(
   "/:id/assign-fgd",
   requireAuth,
   loadCallerProfile,
-  requirePermission("selection"),
+  requireAnyPermission(["selection", "champions"]),
   async (req, res) => {
     const { id } = req.params;
     const { fgdId } = req.body || {};
@@ -604,7 +605,7 @@ router.post(
   "/:id/unassign-fgd",
   requireAuth,
   loadCallerProfile,
-  requirePermission("selection"),
+  requireAnyPermission(["selection", "champions"]),
   async (req, res) => {
     const { id } = req.params;
     const { fgdId } = req.body || {};
@@ -661,7 +662,7 @@ router.post(
   "/fgd-change-requests/:id/resolve",
   requireAuth,
   loadCallerProfile,
-  requirePermission("selection"),
+  requirePermission("champions"),
   async (req, res) => {
     const { id } = req.params;
     const { status } = req.body || {};
