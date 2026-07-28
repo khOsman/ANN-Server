@@ -71,6 +71,16 @@ export function requirePermission(permissionKey) {
   };
 }
 
+export function requireAdmin(req, res, next) {
+  const role = req.callerProfile?.role;
+
+  if (role !== "admin" && role !== "super_admin") {
+    return res.status(403).json({ error: "Only an admin or super admin can perform this action." });
+  }
+
+  return next();
+}
+
 export function requireSuperAdmin(req, res, next) {
   if (req.callerProfile?.role !== "super_admin") {
     return res.status(403).json({ error: "Only a super admin can perform this action." });

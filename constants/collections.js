@@ -7,4 +7,5 @@ export const COLLECTIONS = {
   PARTICIPANTS: "participants",
   PARTICIPANT_EVALUATIONS: "participant_evaluations",
   FGD_CHANGE_REQUESTS: "fgd_change_requests",
+  IMPERSONATION_SESSIONS: "impersonation_sessions",
 };
