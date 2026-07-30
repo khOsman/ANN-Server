@@ -8,13 +8,16 @@ const router = Router();
 
 const CODE_TTL_MS = 60 * 1000; // one-time code must be redeemed within 60s
 
-const TARGET_TYPES = ["user", "champion"];
+const TARGET_TYPES = ["user", "champion", "participant"];
+
+const TARGET_COLLECTIONS = {
+  champion: COLLECTIONS.CHAMPIONS_POOL,
+  participant: COLLECTIONS.PARTICIPANTS,
+  user: COLLECTIONS.USERS,
+};
 
 async function loadTarget(targetType, targetId) {
-  const collectionName =
-    targetType === "champion" ? COLLECTIONS.CHAMPIONS_POOL : COLLECTIONS.USERS;
-
-  const snap = await db.collection(collectionName).doc(targetId).get();
+  const snap = await db.collection(TARGET_COLLECTIONS[targetType]).doc(targetId).get();
 
   if (!snap.exists) return null;
 
@@ -24,6 +27,12 @@ async function loadTarget(targetType, targetId) {
 function isTargetActive(targetType, target) {
   if (targetType === "champion") {
     return target.member_status === "Active" && target.account_status === "Active";
+  }
+
+  if (targetType === "participant") {
+    // Participants have no separate account-activation lifecycle (unlike
+    // users/champions) — existing as a participant record is enough.
+    return true;
   }
 
   return target.status === "active";
