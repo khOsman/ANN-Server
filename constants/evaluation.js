@@ -9,13 +9,14 @@ export const FEEDBACK_OPTION_KEYS = Object.keys(FEEDBACK_OPTIONS);
 export const FEEDBACK_MAX_WEIGHT = 4;
 
 export const RECOMMENDATION_OPTIONS = {
-  neutral: { label: "Neutral", weight: 1 },
-  potential: { label: "Potential", weight: 2 },
-  high_potential: { label: "High Potential", weight: 3 },
+  do_not_recommend: { label: "Do not Recommend", weight: 1 },
+  waiting: { label: "Waiting", weight: 2 },
+  recommend: { label: "Recommend", weight: 3 },
+  strongly_recommend: { label: "Strongly Recommend", weight: 4 },
 };
 
 export const RECOMMENDATION_OPTION_KEYS = Object.keys(RECOMMENDATION_OPTIONS);
-export const RECOMMENDATION_MAX_WEIGHT = 3;
+export const RECOMMENDATION_MAX_WEIGHT = 4;
 
 export const REQUIRED_EVALUATIONS = 3;
 
