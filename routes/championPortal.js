@@ -8,6 +8,8 @@ import {
   RECOMMENDATION_OPTIONS,
   REQUIRED_EVALUATIONS,
   SELECTION_STATUS,
+  RUBRIC_CRITERIA,
+  computeRubricTotal,
   computeEvaluatorScore,
   deriveSelectionStatus,
 } from "../constants/evaluation.js";
@@ -257,11 +259,10 @@ router.post("/participants/:participantId/attendance", async (req, res) => {
 
 router.post("/participants/:participantId/evaluate", async (req, res) => {
   const { participantId } = req.params;
-  const { fgd_score, feedback_option, recommendation_option, notes } = req.body || {};
+  const { rubric_scores, feedback_option, recommendation_option, notes } = req.body || {};
 
   const feedback = FEEDBACK_OPTIONS[feedback_option];
   const recommendation = RECOMMENDATION_OPTIONS[recommendation_option];
-  const score = Number(fgd_score);
 
   if (!feedback) {
     return res.status(400).json({
@@ -277,14 +278,26 @@ router.post("/participants/:participantId/evaluate", async (req, res) => {
     });
   }
 
-  if (
-    fgd_score === undefined ||
-    fgd_score === null ||
-    Number.isNaN(score) ||
-    score < 0 ||
-    score > 10
-  ) {
-    return res.status(400).json({ error: "fgd_score must be a number between 0 and 10." });
+  if (!rubric_scores || typeof rubric_scores !== "object") {
+    return res.status(400).json({ error: "rubric_scores is required." });
+  }
+
+  for (const criterion of RUBRIC_CRITERIA) {
+    const raw = rubric_scores[criterion.key];
+    const value = Number(raw);
+
+    if (
+      raw === undefined ||
+      raw === null ||
+      raw === "" ||
+      Number.isNaN(value) ||
+      value < 0 ||
+      value > criterion.maxScore
+    ) {
+      return res.status(400).json({
+        error: `${criterion.label} score must be a number between 0 and ${criterion.maxScore}.`,
+      });
+    }
   }
 
   try {
@@ -304,8 +317,9 @@ router.post("/participants/:participantId/evaluate", async (req, res) => {
         .json({ error: "You are not assigned to this participant's FGD." });
     }
 
+    const rubricTotal = computeRubricTotal(rubric_scores);
     const computedScore = computeEvaluatorScore({
-      fgdScore: score,
+      rubricScores: rubric_scores,
       feedbackWeight: feedback.weight,
       recommendationWeight: recommendation.weight,
     });
@@ -322,7 +336,8 @@ router.post("/participants/:participantId/evaluate", async (req, res) => {
       fgd_id: participant.fgd_id,
       champion_id: req.champion.id,
       evaluator_name: req.champion.name || "",
-      fgd_score: score,
+      rubric_scores,
+      rubric_total: rubricTotal,
       feedback_option,
       feedback_weight: feedback.weight,
       recommendation_option,
