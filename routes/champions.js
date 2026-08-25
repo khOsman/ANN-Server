@@ -58,6 +58,22 @@ async function nextChampionCode(transaction) {
   return `ANN-CH-${String(nextNumber).padStart(4, "0")}`;
 }
 
+// A champion can hold more than one role at once (e.g. Selection Committee
+// + Mentor) — every endpoint that accepts roles validates the same way:
+// a non-empty array where every entry is a known role, deduped.
+function validateRoles(roles) {
+  if (!Array.isArray(roles) || roles.length === 0) {
+    return { error: `roles is required and must include at least one of: ${CHAMPION_ROLE_OPTIONS.join(", ")}` };
+  }
+
+  const invalid = roles.find((role) => !CHAMPION_ROLE_OPTIONS.includes(role));
+  if (invalid) {
+    return { error: `roles must only contain: ${CHAMPION_ROLE_OPTIONS.join(", ")}` };
+  }
+
+  return { roles: Array.from(new Set(roles)) };
+}
+
 router.post("/register", async (req, res) => {
   const { email, name, phone, date_of_birth, gender, institution, address } = req.body || {};
 
@@ -76,7 +92,7 @@ router.post("/register", async (req, res) => {
       const data = {
         champion_code: championCode,
         firebase_uid: "",
-        role: "",
+        roles: [],
         registration_status: REGISTRATION_STATUS.PENDING,
         account_status: ACCOUNT_STATUS.NOT_CREATED,
         invitation_sent_at: null,
@@ -119,12 +135,10 @@ router.post(
   requirePermission("champions"),
   async (req, res) => {
     const { id } = req.params;
-    const { role } = req.body || {};
 
-    if (!role || !CHAMPION_ROLE_OPTIONS.includes(role)) {
-      return res.status(400).json({
-        error: `role is required and must be one of: ${CHAMPION_ROLE_OPTIONS.join(", ")}`,
-      });
+    const validation = validateRoles(req.body?.roles);
+    if (validation.error) {
+      return res.status(400).json({ error: validation.error });
     }
 
     try {
@@ -137,7 +151,7 @@ router.post(
 
       await championRef.update({
         registration_status: REGISTRATION_STATUS.APPROVED,
-        role,
+        roles: validation.roles,
         approved_by: req.callerProfile.email,
         approved_at: FieldValue.serverTimestamp(),
         updated_at: FieldValue.serverTimestamp(),
@@ -147,6 +161,53 @@ router.post(
     } catch (err) {
       console.error("Approve champion failed:", err);
       return res.status(500).json({ error: "Failed to approve champion." });
+    }
+  }
+);
+
+// Changing roles on an already-approved champion (distinct from the initial
+// Approve action above, and from the super-admin-only full PATCH edit below)
+// — deliberately gated the same as Approve (admin or super_admin), per the
+// explicit product decision that role assignment isn't a super-admin-only
+// action.
+router.post(
+  "/:id/roles",
+  requireAuth,
+  loadCallerProfile,
+  requirePermission("champions"),
+  async (req, res) => {
+    const { id } = req.params;
+
+    const validation = validateRoles(req.body?.roles);
+    if (validation.error) {
+      return res.status(400).json({ error: validation.error });
+    }
+
+    try {
+      const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(id);
+      const snap = await championRef.get();
+
+      if (!snap.exists) {
+        return res.status(404).json({ error: "Champion not found." });
+      }
+
+      const champion = snap.data();
+
+      if (champion.registration_status !== REGISTRATION_STATUS.APPROVED) {
+        return res
+          .status(400)
+          .json({ error: "Approve the champion before managing their roles." });
+      }
+
+      await championRef.update({
+        roles: validation.roles,
+        updated_at: FieldValue.serverTimestamp(),
+      });
+
+      return res.status(200).json({ success: true });
+    } catch (err) {
+      console.error("Update champion roles failed:", err);
+      return res.status(500).json({ error: "Failed to update roles." });
     }
   }
 );
@@ -376,16 +437,20 @@ router.patch(
       date_of_birth,
       institution,
       address,
-      role,
+      roles,
       registration_status,
       account_status,
       member_status,
     } = req.body || {};
 
-    if (role !== undefined && !CHAMPION_ROLE_OPTIONS.includes(role)) {
-      return res.status(400).json({
-        error: `role must be one of: ${CHAMPION_ROLE_OPTIONS.join(", ")}`,
-      });
+    let validatedRoles;
+
+    if (roles !== undefined) {
+      const validation = validateRoles(roles);
+      if (validation.error) {
+        return res.status(400).json({ error: validation.error });
+      }
+      validatedRoles = validation.roles;
     }
 
     if (
@@ -431,7 +496,7 @@ router.patch(
       if (date_of_birth !== undefined) updates.date_of_birth = date_of_birth;
       if (institution !== undefined) updates.institution = String(institution).trim();
       if (address !== undefined) updates.address = String(address).trim();
-      if (role !== undefined) updates.role = role;
+      if (validatedRoles !== undefined) updates.roles = validatedRoles;
       if (registration_status !== undefined) updates.registration_status = registration_status;
       if (account_status !== undefined) updates.account_status = account_status;
       if (member_status !== undefined) updates.member_status = member_status;

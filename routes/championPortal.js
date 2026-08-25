@@ -13,7 +13,12 @@ import {
   computeEvaluatorScore,
   deriveSelectionStatus,
 } from "../constants/evaluation.js";
-import { GENDER_OPTIONS, EDUCATION_LEVEL_OPTIONS, CHAMPION_ROLES } from "../constants/champions.js";
+import {
+  GENDER_OPTIONS,
+  EDUCATION_LEVEL_OPTIONS,
+  CHAMPION_ROLES,
+  getChampionRoles,
+} from "../constants/champions.js";
 import {
   buildFgdAssignmentUpdates,
   syncChampionAcrossAssignedFgds,
@@ -164,7 +169,7 @@ router.post("/fgds/:fgdId/request-change", async (req, res) => {
 router.post("/fgds/:fgdId/book", async (req, res) => {
   const { fgdId } = req.params;
 
-  if (req.champion.role !== CHAMPION_ROLES.SELECTION_COMMITTEE) {
+  if (!getChampionRoles(req.champion).includes(CHAMPION_ROLES.SELECTION_COMMITTEE)) {
     return res
       .status(403)
       .json({ error: "Only Selection Committee members can book FGD slots." });
