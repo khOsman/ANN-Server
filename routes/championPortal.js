@@ -170,47 +170,79 @@ router.post("/fgds/:fgdId/book", async (req, res) => {
       .json({ error: "Only Selection Committee members can book FGD slots." });
   }
 
-  try {
-    const fgdRef = db.collection(COLLECTIONS.FGDS).doc(fgdId);
-    const fgdSnap = await fgdRef.get();
+  const fgdRef = db.collection(COLLECTIONS.FGDS).doc(fgdId);
+  const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(req.champion.id);
 
-    if (!fgdSnap.exists) {
+  try {
+    // A transaction (not a plain read-then-write) closes the race where two
+    // committee members book the same FGD at nearly the same instant: both
+    // would otherwise read the same stale committee_members snapshot, both
+    // pass the cap check, and whichever write lands second would silently
+    // overwrite the first (a Firestore field update replaces the whole
+    // array, it doesn't merge) — the loser's own champion doc would still
+    // say they're assigned, but the FGD's roster would quietly drop them.
+    // Firestore detects the conflicting write and retries this callback
+    // with a fresh read instead.
+    const result = await db.runTransaction(async (transaction) => {
+      const [fgdSnap, championSnap] = await Promise.all([
+        transaction.get(fgdRef),
+        transaction.get(championRef),
+      ]);
+
+      if (!fgdSnap.exists) {
+        return { status: "not_found" };
+      }
+
+      const fgd = fgdSnap.data();
+      const committeeMembers = fgd.committee_members || [];
+
+      if (committeeMembers.some((member) => member.champion_id === req.champion.id)) {
+        return { status: "already_booked" };
+      }
+
+      if (committeeMembers.length >= FGD_ROSTER_CAP) {
+        return { status: "full" };
+      }
+
+      // Re-read rather than trusting req.champion (loaded by middleware
+      // before this handler ran) — the same guard against a stale
+      // assigned_fgds array if this champion is booking two FGDs at once
+      // from separate tabs.
+      const champion = championSnap.exists ? championSnap.data() : req.champion;
+
+      const { championUpdates, fgdUpdates } = buildFgdAssignmentUpdates({
+        championId: req.champion.id,
+        champion,
+        fgdId,
+        fgd,
+      });
+
+      transaction.update(championRef, {
+        ...championUpdates,
+        updated_at: FieldValue.serverTimestamp(),
+      });
+      transaction.update(fgdRef, {
+        ...fgdUpdates,
+        updated_at: FieldValue.serverTimestamp(),
+      });
+
+      return { status: "ok" };
+    });
+
+    if (result.status === "not_found") {
       return res.status(404).json({ error: "FGD not found." });
     }
 
-    const fgd = fgdSnap.data();
-    const committeeMembers = fgd.committee_members || [];
-
-    if (committeeMembers.some((member) => member.champion_id === req.champion.id)) {
+    if (result.status === "already_booked") {
       return res.status(400).json({ error: "You already have a slot in this FGD." });
     }
 
-    if (committeeMembers.length >= FGD_ROSTER_CAP) {
+    if (result.status === "full") {
       return res.status(409).json({ error: "This FGD's roster is already full." });
     }
 
-    const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(req.champion.id);
-
-    const { championUpdates, fgdUpdates } = buildFgdAssignmentUpdates({
-      championId: req.champion.id,
-      champion: req.champion,
-      fgdId,
-      fgd,
-    });
-
     // Self-booking is a routine slot pick, not an admin decision — no
     // notification email (unlike the admin assign-fgd endpoint).
-    await Promise.all([
-      championRef.update({
-        ...championUpdates,
-        updated_at: FieldValue.serverTimestamp(),
-      }),
-      fgdRef.update({
-        ...fgdUpdates,
-        updated_at: FieldValue.serverTimestamp(),
-      }),
-    ]);
-
     return res.status(200).json({ success: true });
   } catch (err) {
     console.error("Book FGD slot failed:", err);
