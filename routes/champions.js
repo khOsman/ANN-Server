@@ -431,6 +431,7 @@ router.patch(
   async (req, res) => {
     const { id } = req.params;
     const {
+      champion_code,
       name,
       email,
       phone,
@@ -442,6 +443,16 @@ router.patch(
       account_status,
       member_status,
     } = req.body || {};
+
+    let normalizedChampionCode;
+
+    if (champion_code !== undefined) {
+      normalizedChampionCode = String(champion_code).trim();
+
+      if (!normalizedChampionCode) {
+        return res.status(400).json({ error: "champion_code cannot be blank." });
+      }
+    }
 
     let validatedRoles;
 
@@ -490,6 +501,25 @@ router.patch(
 
       const champion = snap.data();
       const updates = { updated_at: FieldValue.serverTimestamp() };
+
+      if (
+        normalizedChampionCode !== undefined &&
+        normalizedChampionCode !== champion.champion_code
+      ) {
+        const clash = await db
+          .collection(COLLECTIONS.CHAMPIONS_POOL)
+          .where("champion_code", "==", normalizedChampionCode)
+          .limit(1)
+          .get();
+
+        if (!clash.empty) {
+          return res.status(400).json({
+            error: `champion_code "${normalizedChampionCode}" is already in use by another champion.`,
+          });
+        }
+
+        updates.champion_code = normalizedChampionCode;
+      }
 
       if (name !== undefined) updates.name = String(name).trim();
       if (phone !== undefined) updates.phone = String(phone).trim();
