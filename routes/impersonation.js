@@ -21,7 +21,7 @@ async function loadTarget(targetType, targetId) {
 
   if (!snap.exists) return null;
 
-  return { id: snap.id, ...snap.data() };
+  return { ...snap.data(), id: snap.id };
 }
 
 function isTargetActive(targetType, target) {

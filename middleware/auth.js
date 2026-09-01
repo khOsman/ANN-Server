@@ -179,7 +179,7 @@ export async function requireActiveChampion(req, res, next) {
       return res.status(403).json({ error: "Champion account is not active." });
     }
 
-    req.champion = { id: snap.id, ...champion };
+    req.champion = { ...champion, id: snap.id };
     return next();
   } catch (err) {
     console.error("Failed to load champion profile:", err);
