@@ -23,6 +23,7 @@ import { createActivationToken, hashToken } from "../tokens.js";
 import {
   buildFgdAssignmentUpdates,
   syncChampionAcrossAssignedFgds,
+  FGD_ROSTER_CAP,
 } from "../services/fgdAssignment.js";
 
 const router = Router();
@@ -648,44 +649,84 @@ router.post(
       const championRef = db.collection(COLLECTIONS.CHAMPIONS_POOL).doc(id);
       const fgdRef = db.collection(COLLECTIONS.FGDS).doc(fgdId);
 
-      const [championSnap, fgdSnap] = await Promise.all([
-        championRef.get(),
-        fgdRef.get(),
-      ]);
+      // A transaction (not a plain read-then-write) closes the race where an
+      // admin multi-selects several committee members and assigns them all
+      // at once: the frontend fires one request per selected champion
+      // concurrently, and a plain read-then-write here would let each one
+      // read the same stale committee_members snapshot, compute its own
+      // "existing + me" array, and whichever write lands last would silently
+      // overwrite every other one (a Firestore field update replaces the
+      // whole array, it doesn't merge) — exactly the bug where selecting
+      // three committee members only ever left one actually attached. Also
+      // enforces the same FGD_ROSTER_CAP the self-service booking endpoint
+      // already enforces, which this admin path never checked at all.
+      const result = await db.runTransaction(async (transaction) => {
+        const [championSnap, fgdSnap] = await Promise.all([
+          transaction.get(championRef),
+          transaction.get(fgdRef),
+        ]);
 
-      if (!championSnap.exists) {
+        if (!championSnap.exists) {
+          return { status: "champion_not_found" };
+        }
+
+        if (!fgdSnap.exists) {
+          return { status: "fgd_not_found" };
+        }
+
+        const champion = championSnap.data();
+        const fgd = fgdSnap.data();
+        const committeeMembers = fgd.committee_members || [];
+
+        if (committeeMembers.some((member) => member.champion_id === id)) {
+          return { status: "already_assigned", champion, fgd };
+        }
+
+        if (committeeMembers.length >= FGD_ROSTER_CAP) {
+          return { status: "full" };
+        }
+
+        const { championUpdates, fgdUpdates } = buildFgdAssignmentUpdates({
+          championId: id,
+          champion,
+          fgdId,
+          fgd,
+        });
+
+        transaction.update(championRef, {
+          ...championUpdates,
+          updated_at: FieldValue.serverTimestamp(),
+        });
+        transaction.update(fgdRef, {
+          ...fgdUpdates,
+          updated_at: FieldValue.serverTimestamp(),
+        });
+
+        return { status: "ok", champion, fgd };
+      });
+
+      if (result.status === "champion_not_found") {
         return res.status(404).json({ error: "Champion not found." });
       }
 
-      if (!fgdSnap.exists) {
+      if (result.status === "fgd_not_found") {
         return res.status(404).json({ error: "FGD not found." });
       }
 
-      const champion = championSnap.data();
-      const fgd = fgdSnap.data();
+      if (result.status === "full") {
+        return res.status(409).json({
+          error: `This FGD's committee is already full (${FGD_ROSTER_CAP} members).`,
+        });
+      }
 
-      const { championUpdates, fgdUpdates } = buildFgdAssignmentUpdates({
-        championId: id,
-        champion,
-        fgdId,
-        fgd,
-      });
-
-      await Promise.all([
-        championRef.update({
-          ...championUpdates,
-          updated_at: FieldValue.serverTimestamp(),
-        }),
-        fgdRef.update({
-          ...fgdUpdates,
-          updated_at: FieldValue.serverTimestamp(),
-        }),
-      ]);
+      if (result.status === "already_assigned") {
+        return res.status(200).json({ success: true, alreadyAssigned: true });
+      }
 
       await sendFGDAssignmentEmail({
-        to: champion.email,
-        name: champion.name,
-        fgd: { ...fgd, id: fgdId },
+        to: result.champion.email,
+        name: result.champion.name,
+        fgd: { ...result.fgd, id: fgdId },
       });
 
       return res.status(200).json({ success: true });
