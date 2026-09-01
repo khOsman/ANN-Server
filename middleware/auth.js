@@ -1,5 +1,26 @@
 import { auth as adminAuth, db } from "../firebaseAdmin.js";
+import { FieldValue } from "firebase-admin/firestore";
 import { COLLECTIONS } from "../constants/collections.js";
+
+// Impersonated sign-ins carry these two custom claims (set when the
+// custom token is minted in routes/impersonation.js). Every backend-routed
+// action taken under one is logged here — the actor's own uid, and who was
+// really behind it — so a champion/staff action list is not the only trace
+// impersonation leaves behind. This does not cover writes made directly
+// against Firestore from the client SDK (most admin CRUD on
+// cohorts/forms/fgds/participants goes that way, not through this
+// backend) — closing that gap would need a Firestore-trigger-based audit
+// log (Cloud Functions), which this project doesn't run today.
+function logImpersonatedAction(req) {
+  return db.collection(COLLECTIONS.AUDIT_LOG).add({
+    acted_as_uid: req.authUser.uid,
+    acted_as_email: req.authUser.email || "",
+    impersonated_by: req.authUser.impersonated_by || "",
+    method: req.method,
+    path: req.originalUrl,
+    at: FieldValue.serverTimestamp(),
+  });
+}
 
 export async function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
@@ -11,6 +32,15 @@ export async function requireAuth(req, res, next) {
 
   try {
     req.authUser = await adminAuth.verifyIdToken(token);
+
+    if (req.authUser.impersonated) {
+      // Fire-and-forget — logging must never add latency to, or become a
+      // failure point for, the actual request.
+      logImpersonatedAction(req).catch((err) =>
+        console.error("Failed to log impersonated action:", err)
+      );
+    }
+
     return next();
   } catch {
     return res.status(401).json({ error: "Invalid or expired token." });
@@ -50,12 +80,27 @@ export async function loadCallerProfile(req, res, next) {
   }
 }
 
+// Every route gated by requirePermission/requireAnyPermission in this
+// backend is a mutation (POST/PATCH/DELETE) — there are no read routes on
+// this path. The Viewer role's permission map otherwise mirrors Admin's on
+// purpose (so a Viewer can see everything an Admin can), but Viewer must
+// never be able to write anything, so it's rejected here at the shared
+// checkpoint rather than relying on every current and future route to
+// remember to check role on top of the permission bit.
+function isViewer(profile) {
+  return profile.role === "viewer";
+}
+
 export function requirePermission(permissionKey) {
   return (req, res, next) => {
     const profile = req.callerProfile;
 
     if (!profile) {
       return res.status(403).json({ error: "Caller profile not loaded." });
+    }
+
+    if (isViewer(profile)) {
+      return res.status(403).json({ error: "Viewer accounts are read-only." });
     }
 
     const isSuperAdmin = profile.role === "super_admin";
@@ -77,6 +122,10 @@ export function requireAnyPermission(permissionKeys) {
 
     if (!profile) {
       return res.status(403).json({ error: "Caller profile not loaded." });
+    }
+
+    if (isViewer(profile)) {
+      return res.status(403).json({ error: "Viewer accounts are read-only." });
     }
 
     const isSuperAdmin = profile.role === "super_admin";
