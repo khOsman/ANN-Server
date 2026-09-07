@@ -296,46 +296,8 @@ router.post("/participants/:participantId/attendance", async (req, res) => {
 
 router.post("/participants/:participantId/evaluate", async (req, res) => {
   const { participantId } = req.params;
-  const { rubric_scores, feedback_option, recommendation_option, notes } = req.body || {};
-
-  const feedback = FEEDBACK_OPTIONS[feedback_option];
-  const recommendation = RECOMMENDATION_OPTIONS[recommendation_option];
-
-  if (!feedback) {
-    return res.status(400).json({
-      error: `feedback_option must be one of: ${Object.keys(FEEDBACK_OPTIONS).join(", ")}`,
-    });
-  }
-
-  if (!recommendation) {
-    return res.status(400).json({
-      error: `recommendation_option must be one of: ${Object.keys(
-        RECOMMENDATION_OPTIONS
-      ).join(", ")}`,
-    });
-  }
-
-  if (!rubric_scores || typeof rubric_scores !== "object") {
-    return res.status(400).json({ error: "rubric_scores is required." });
-  }
-
-  for (const criterion of RUBRIC_CRITERIA) {
-    const raw = rubric_scores[criterion.key];
-    const value = Number(raw);
-
-    if (
-      raw === undefined ||
-      raw === null ||
-      raw === "" ||
-      Number.isNaN(value) ||
-      value < 0 ||
-      value > criterion.maxScore
-    ) {
-      return res.status(400).json({
-        error: `${criterion.label} score must be a number between 0 and ${criterion.maxScore}.`,
-      });
-    }
-  }
+  const { rubric_scores, feedback_option, recommendation_option, notes, is_draft } =
+    req.body || {};
 
   try {
     const participantRef = db.collection(COLLECTIONS.PARTICIPANTS).doc(participantId);
@@ -354,18 +316,77 @@ router.post("/participants/:participantId/evaluate", async (req, res) => {
         .json({ error: "You are not assigned to this participant's FGD." });
     }
 
-    const rubricTotal = computeRubricTotal(rubric_scores);
-    const computedScore = computeEvaluatorScore({
-      rubricScores: rubric_scores,
-      feedbackWeight: feedback.weight,
-      recommendationWeight: recommendation.weight,
-    });
-
     const evaluationRef = db
       .collection(COLLECTIONS.PARTICIPANT_EVALUATIONS)
       .doc(`${participantId}_${req.champion.id}`);
 
     const existingSnap = await evaluationRef.get();
+    const existingData = existingSnap.exists ? existingSnap.data() : null;
+
+    // Once an evaluation is actually Submitted, it's a final record — further
+    // saves go through the strict/final path below regardless of is_draft, so
+    // a stray draft-save request can never quietly downgrade a finished
+    // evaluation back out of the participant's tally.
+    const alreadySubmitted = existingData?.status === "Submitted";
+    const saveAsDraft = Boolean(is_draft) && !alreadySubmitted;
+
+    const feedback = FEEDBACK_OPTIONS[feedback_option];
+    const recommendation = RECOMMENDATION_OPTIONS[recommendation_option];
+
+    if (!saveAsDraft) {
+      if (!feedback) {
+        return res.status(400).json({
+          error: `feedback_option must be one of: ${Object.keys(FEEDBACK_OPTIONS).join(", ")}`,
+        });
+      }
+
+      if (!recommendation) {
+        return res.status(400).json({
+          error: `recommendation_option must be one of: ${Object.keys(
+            RECOMMENDATION_OPTIONS
+          ).join(", ")}`,
+        });
+      }
+
+      if (!rubric_scores || typeof rubric_scores !== "object") {
+        return res.status(400).json({ error: "rubric_scores is required." });
+      }
+
+      for (const criterion of RUBRIC_CRITERIA) {
+        const raw = rubric_scores[criterion.key];
+        const value = Number(raw);
+
+        if (
+          raw === undefined ||
+          raw === null ||
+          raw === "" ||
+          Number.isNaN(value) ||
+          value < 0 ||
+          value > criterion.maxScore
+        ) {
+          return res.status(400).json({
+            error: `${criterion.label} score must be a number between 0 and ${criterion.maxScore}.`,
+          });
+        }
+      }
+    } else if (rubric_scores !== undefined && typeof rubric_scores !== "object") {
+      return res.status(400).json({ error: "rubric_scores must be an object." });
+    }
+
+    // A draft's rubric total is just a running preview — computeRubricTotal
+    // already treats missing/invalid entries as 0, safe to call on partial
+    // data. computed_score needs a valid feedback+recommendation weight, so
+    // it stays null until both are actually chosen.
+    const rubricTotal = rubric_scores ? computeRubricTotal(rubric_scores) : 0;
+    const computedScore =
+      feedback && recommendation && rubric_scores
+        ? computeEvaluatorScore({
+            rubricScores: rubric_scores,
+            feedbackWeight: feedback.weight,
+            recommendationWeight: recommendation.weight,
+          })
+        : null;
+
     const now = FieldValue.serverTimestamp();
 
     await evaluationRef.set({
@@ -373,26 +394,36 @@ router.post("/participants/:participantId/evaluate", async (req, res) => {
       fgd_id: participant.fgd_id,
       champion_id: req.champion.id,
       evaluator_name: req.champion.name || "",
-      rubric_scores,
+      rubric_scores: rubric_scores || {},
       rubric_total: rubricTotal,
-      feedback_option,
-      feedback_weight: feedback.weight,
-      recommendation_option,
-      recommendation_weight: recommendation.weight,
+      feedback_option: feedback_option || "",
+      feedback_weight: feedback?.weight ?? null,
+      recommendation_option: recommendation_option || "",
+      recommendation_weight: recommendation?.weight ?? null,
       computed_score: computedScore,
       notes: notes ? String(notes).trim() : "",
-      created_at: existingSnap.exists ? existingSnap.data().created_at : now,
+      status: saveAsDraft ? "Draft" : "Submitted",
+      created_at: existingData ? existingData.created_at : now,
       updated_at: now,
+      submitted_at: saveAsDraft ? existingData?.submitted_at || null : now,
     });
+
+    if (saveAsDraft) {
+      return res.status(200).json({ success: true, status: "Draft" });
+    }
 
     // Recomputed from all evaluator docs (not just this one) so the
     // participant's aggregate stays correct regardless of update order.
+    // Drafts never count — a doc with no status field is a pre-draft-feature
+    // record, which was always a final submission, so it counts as Submitted.
     const allEvaluationsSnap = await db
       .collection(COLLECTIONS.PARTICIPANT_EVALUATIONS)
       .where("participant_id", "==", participantId)
       .get();
 
-    const scores = allEvaluationsSnap.docs.map((doc) => doc.data().computed_score);
+    const scores = allEvaluationsSnap.docs
+      .filter((doc) => (doc.data().status || "Submitted") === "Submitted")
+      .map((doc) => doc.data().computed_score);
     const evaluationCount = scores.length;
     const averageScore = scores.reduce((sum, value) => sum + value, 0) / evaluationCount;
 
@@ -429,6 +460,7 @@ router.post("/participants/:participantId/evaluate", async (req, res) => {
 
     return res.status(200).json({
       success: true,
+      status: "Submitted",
       evaluation_count: evaluationCount,
       average_evaluation_score: averageScore,
     });
