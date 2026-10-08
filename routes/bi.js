@@ -244,9 +244,241 @@ const toCsv = (rows) => {
 
 router.use(requireApiKey);
 
+// ---------------------------------------------------------------------
+// Raw per-collection feed (/api/bi/raw/:collection) — every document of a
+// Firestore collection as one row, for building a star schema in Power BI.
+//
+// Safety rules, because this exposes the real documents:
+//  * Credential-like fields (token/secret/password/hash/otp) are NEVER
+//    returned, regardless of any setting.
+//  * Personal fields (name, email, phone, DOB, notes, free-text feedback...)
+//    are stripped from the collections that hold people, and from form
+//    answers that are identifying, unless BI_INCLUDE_PII=true is set on the
+//    server. Rows stay joinable through ids and participant/champion codes.
+//  * impersonation_sessions is never exposed (it is a login-as mechanism).
+// ---------------------------------------------------------------------
+const INCLUDE_PII = process.env.BI_INCLUDE_PII === "true";
+
+const RAW_COLLECTIONS = [
+  "audit_log",
+  "champions_pool",
+  "cohorts",
+  "counters",
+  "data_points",
+  "databases",
+  "fgds",
+  "form_fields",
+  "form_responses",
+  "forms",
+  "participant_evaluations",
+  "participants",
+  "users",
+];
+
+// Collections whose documents describe people — PII stripping applies here.
+// Schema-like collections (data_points, form_fields, forms, cohorts...) use
+// keys such as "name" for non-personal things, so they are left untouched.
+const PII_COLLECTIONS = new Set([
+  "audit_log",
+  "champions_pool",
+  "fgds",
+  "form_responses",
+  "participant_evaluations",
+  "participants",
+  "users",
+]);
+
+const ALWAYS_DROP_KEY = /token|secret|password|passcode|hash|otp|api_?key/i;
+const PII_EXACT_KEYS = new Set([
+  "name",
+  "email",
+  "phone",
+  "mobile",
+  "date_of_birth",
+  "dob",
+  "address",
+  "nid",
+  "display_name",
+  "photo_url",
+  "notes",
+  "fgd_feedback",
+  "selection_committee_notes",
+  "feedback",
+]);
+const PII_KEY_PATTERN = /(^|_)(email|phone|mobile)(_|$)|_by_name$|^(actor|user|evaluator|champion)_name$/i;
+
+const isPiiKey = (key) => PII_EXACT_KEYS.has(key) || PII_KEY_PATTERN.test(key);
+
+// Firestore value -> plain JSON value (Timestamps as ISO strings, refs as
+// their path); strips credential keys and, for people collections, PII keys.
+const normalizeValue = (value, stripPii) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value.toDate === "function") return value.toDate().toISOString();
+  if (Array.isArray(value)) return value.map((v) => normalizeValue(v, stripPii));
+  if (typeof value === "object") {
+    if (typeof value.path === "string" && value.firestore) return value.path;
+    if (typeof value.latitude === "number" && typeof value.longitude === "number") {
+      return `${value.latitude},${value.longitude}`;
+    }
+    const out = {};
+    Object.entries(value).forEach(([key, v]) => {
+      if (ALWAYS_DROP_KEY.test(key)) return;
+      if (stripPii && isPiiKey(key)) return;
+      out[key] = normalizeValue(v, stripPii);
+    });
+    return out;
+  }
+  return value;
+};
+
+// Whole-column drops (served view only) for fields whose contents are
+// identifying but can't be detected by key: answers hold free-form values
+// and custom_data is keyed by data-point id. The same answers are available
+// per-question, with identifying ones blanked, via form_response_answers.
+const DROP_WHEN_STRIPPED = {
+  form_responses: ["answers"],
+  participants: ["custom_data"],
+};
+
+const rawCache = new Map(); // collection -> { loadedAt, rows, pending }
+
+const loadRaw = async (name) => {
+  const entry = rawCache.get(name);
+  if (entry?.rows && Date.now() - entry.loadedAt < CACHE_TTL_MS) return entry;
+  if (entry?.pending) return entry.pending;
+
+  const stripPii = !INCLUDE_PII && PII_COLLECTIONS.has(name);
+
+  const pending = db
+    .collection(name)
+    .get()
+    .then((snap) => {
+      const rows = snap.docs.map((d) => ({
+        id: d.id,
+        ...normalizeValue(d.data(), stripPii),
+      }));
+      const loaded = { loadedAt: Date.now(), rows, pending: null };
+      rawCache.set(name, loaded);
+      return loaded;
+    })
+    .catch((err) => {
+      rawCache.delete(name);
+      throw err;
+    });
+
+  rawCache.set(name, { ...(entry || {}), pending });
+  return pending;
+};
+
+// Long "answers" table: one row per answered question, so the per-form
+// answer arrays can sit in the model as a proper fact table. Identifying
+// answers (name/email/phone-type or mapped to those) are blanked unless
+// BI_INCLUDE_PII=true.
+const ANSWER_PII_MAPPED = new Set(["name", "email", "phone", "date_of_birth"]);
+const ANSWER_PII_TYPES = new Set(["email", "phone", "tel"]);
+const ANSWER_PII_LABEL = /name|e-?mail|phone|mobile|nid|address|নাম|ফোন|মোবাইল|ইমেইল|ঠিকানা/i;
+
+const buildAnswerRows = async () => {
+  const [responses, fields] = await Promise.all([
+    loadRaw("form_responses"),
+    loadRaw("form_fields"),
+  ]);
+  const fieldsById = new Map(fields.rows.map((f) => [f.id, f]));
+  const rows = [];
+
+  responses.rows.forEach((response) => {
+    (response.answers || []).forEach((answer) => {
+      const field = fieldsById.get(answer.field_id) || {};
+      const labelEn = answer.field_label_en || field.label_en || "";
+      const labelBn = answer.field_label_bn || field.label_bn || "";
+      const identifying =
+        ANSWER_PII_MAPPED.has(field.mapped_participant_field) ||
+        ANSWER_PII_TYPES.has(String(field.field_type || "").toLowerCase()) ||
+        ANSWER_PII_LABEL.test(`${labelEn} ${labelBn}`);
+      const raw = Array.isArray(answer.value) ? answer.value.join(", ") : answer.value;
+
+      rows.push({
+        response_id: response.id,
+        form_id: response.form_id || "",
+        participant_id: response.participant_id || "",
+        field_id: answer.field_id || "",
+        field_label_en: labelEn,
+        field_label_bn: labelBn,
+        field_type: field.field_type || "",
+        mapped_participant_field: field.mapped_participant_field || "",
+        data_point_id: field.data_point_id || "",
+        value: !INCLUDE_PII && identifying ? "" : raw ?? "",
+      });
+    });
+  });
+
+  return { loadedAt: Math.min(responses.loadedAt, fields.loadedAt), rows };
+};
+
+router.get("/raw", (req, res) => {
+  res.json({
+    collections: [...RAW_COLLECTIONS, "form_response_answers"],
+    pii_included: INCLUDE_PII,
+    usage: "GET /api/bi/raw/<collection>?format=csv|json",
+  });
+});
+
+router.get("/raw/:collection", async (req, res) => {
+  const { collection } = req.params;
+
+  try {
+    let loaded;
+
+    if (collection === "form_response_answers") {
+      loaded = await buildAnswerRows();
+    } else if (RAW_COLLECTIONS.includes(collection)) {
+      const base = await loadRaw(collection);
+      const drop = INCLUDE_PII ? [] : DROP_WHEN_STRIPPED[collection] || [];
+
+      loaded = {
+        loadedAt: base.loadedAt,
+        rows: drop.length
+          ? base.rows.map((row) => {
+              const copy = { ...row };
+              drop.forEach((key) => delete copy[key]);
+              return copy;
+            })
+          : base.rows,
+      };
+    } else {
+      return res.status(404).json({
+        error: `Unknown collection "${collection}".`,
+        available: [...RAW_COLLECTIONS, "form_response_answers"],
+      });
+    }
+
+    res.set("Cache-Control", "no-store");
+    res.set("X-Data-Loaded-At", new Date(loaded.loadedAt).toISOString());
+
+    if (req.query.format === "json") return res.json(loaded.rows);
+
+    // CSV: nested objects/arrays become JSON text columns, which Power
+    // Query can expand with "Parse > JSON".
+    const flat = loaded.rows.map((row) => {
+      const out = {};
+      Object.entries(row).forEach(([key, v]) => {
+        out[key] = v !== null && typeof v === "object" ? JSON.stringify(v) : v;
+      });
+      return out;
+    });
+
+    res.type("text/csv; charset=utf-8");
+    return res.send(toCsv(flat));
+  } catch (err) {
+    console.error("BI raw feed failed:", err);
+    return res.status(500).json({ error: "Failed to build raw feed." });
+  }
+});
+
 router.get("/", (req, res) => {
   res.json({
-    tables: ["cohorts", "participants", "fgds", "evaluations", "champions"],
+    curated_tables: ["cohorts", "participants", "fgds", "evaluations", "champions"],
+    raw: "GET /api/bi/raw for the per-collection feed",
     usage: "GET /api/bi/<table>?format=csv|json  (send the key as X-API-Key or ?key=)",
   });
 });
