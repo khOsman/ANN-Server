@@ -6,6 +6,7 @@ import championPortalRouter from "./routes/championPortal.js";
 import usersRouter from "./routes/users.js";
 import impersonationRouter from "./routes/impersonation.js";
 import participantsRouter from "./routes/participants.js";
+import biRouter from "./routes/bi.js";
 
 const app = express();
 
@@ -26,6 +27,7 @@ app.use("/api/me", championPortalRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/impersonation", impersonationRouter);
 app.use("/api/participants", participantsRouter);
+app.use("/api/bi", biRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });
