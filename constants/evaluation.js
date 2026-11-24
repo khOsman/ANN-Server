@@ -27,9 +27,22 @@ export const SELECTION_STATUS = {
   REJECTED: "Rejected",
 };
 
-// BRAC's official Participant Selection rubric — 7 weighted criteria summing
-// to 100, replacing the old manual 0-10 "FGD Score" field.
-export const RUBRIC_CRITERIA = [
+// Two versions of BRAC's Participant Selection rubric exist side by side.
+//   v1 (legacy): 7 weighted criteria, used by every FGD that already had
+//     evaluations when v2 was introduced; an evaluation saved without a
+//     rubric_version is v1.
+//   v2 (current): 4 criteria of 25 points each (the "Updated Rubric" form).
+// Each FGD is locked to one version the first time anyone evaluates in it, so
+// all three committee members score on the same rubric and the participant's
+// average is always like for like. Both are out of 100.
+export const RUBRIC_VERSION = {
+  V1: "v1",
+  V2: "v2",
+};
+
+export const CURRENT_RUBRIC_VERSION = RUBRIC_VERSION.V2;
+
+const RUBRIC_V1_CRITERIA = [
   {
     key: "values_empathy",
     label: "Values & Empathy",
@@ -81,32 +94,91 @@ export const RUBRIC_CRITERIA = [
   },
 ];
 
-export const RUBRIC_MAX_TOTAL = RUBRIC_CRITERIA.reduce(
-  (sum, criterion) => sum + criterion.maxScore,
-  0
-); // 100
+const RUBRIC_V2_CRITERIA = [
+  {
+    key: "social_consciousness",
+    label: "Social Consciousness",
+    description:
+      "Demonstrates respect, empathy, inclusivity, and a non-judgmental attitude; understands social issues and local realities; shows sensitivity toward diverse perspectives and a genuine willingness to contribute to positive social change.",
+    maxScore: 25,
+  },
+  {
+    key: "learning_problem_solving",
+    label: "Learning & Problem-Solving",
+    description:
+      "Demonstrates self-awareness and willingness to learn from experiences and feedback; reflects on actions and mistakes; analyses problems logically, considers multiple perspectives, questions assumptions, and develops practical, solution-oriented approaches.",
+    maxScore: 25,
+  },
+  {
+    key: "leadership_teamwork",
+    label: "Leadership & Teamwork",
+    description:
+      "Takes ownership and demonstrates initiative in addressing problems; is proactive and solution-oriented; encourages participation, values others' contributions, works effectively in teams, and demonstrates the ability to lead or contribute constructively toward a shared goal.",
+    maxScore: 25,
+  },
+  {
+    key: "communication_expression",
+    label: "Communication & Expression",
+    description:
+      "Expresses thoughts and ideas clearly and transparently; listens actively; communicates respectfully with others; can articulate observations and perspectives using relevant facts, examples, or data; and responds constructively to differing opinions.",
+    maxScore: 25,
+  },
+];
 
-export function computeRubricTotal(rubricScores) {
-  return RUBRIC_CRITERIA.reduce(
+const sumMax = (criteria) => criteria.reduce((sum, criterion) => sum + criterion.maxScore, 0);
+
+export const RUBRICS = {
+  [RUBRIC_VERSION.V1]: {
+    version: RUBRIC_VERSION.V1,
+    label: "Previous rubric (7 criteria)",
+    criteria: RUBRIC_V1_CRITERIA,
+    maxTotal: sumMax(RUBRIC_V1_CRITERIA), // 100
+  },
+  [RUBRIC_VERSION.V2]: {
+    version: RUBRIC_VERSION.V2,
+    label: "Updated rubric (4 criteria)",
+    criteria: RUBRIC_V2_CRITERIA,
+    maxTotal: sumMax(RUBRIC_V2_CRITERIA), // 100
+  },
+};
+
+// A missing or unknown version is a pre-existing evaluation: v1.
+export const getRubric = (version) => RUBRICS[version] || RUBRICS[RUBRIC_VERSION.V1];
+
+export function computeRubricTotal(rubricScores, rubricVersion) {
+  return getRubric(rubricVersion).criteria.reduce(
     (sum, criterion) => sum + (Number(rubricScores?.[criterion.key]) || 0),
     0
   );
 }
 
-// Per-evaluator score = average of three components normalized to
-// RUBRIC_MAX_TOTAL (0-100): the rubric total, the feedback weight, and the
-// recommendation weight.
-export function computeEvaluatorScore({ rubricScores, feedbackWeight, recommendationWeight }) {
-  const rubricTotal = computeRubricTotal(rubricScores);
-  const feedbackComponent = (Number(feedbackWeight) / FEEDBACK_MAX_WEIGHT) * RUBRIC_MAX_TOTAL;
+// Per-evaluator score = average of three components normalized to 0-100: the
+// rubric total (scaled to the rubric's own maximum), the feedback weight, and
+// the recommendation weight. The blend is unchanged by the rubric version.
+export function computeEvaluatorScore({
+  rubricScores,
+  rubricVersion,
+  feedbackWeight,
+  recommendationWeight,
+}) {
+  const rubric = getRubric(rubricVersion);
+  const rubricComponent =
+    (computeRubricTotal(rubricScores, rubricVersion) / rubric.maxTotal) * 100;
+  const feedbackComponent = (Number(feedbackWeight) / FEEDBACK_MAX_WEIGHT) * 100;
   const recommendationComponent =
-    (Number(recommendationWeight) / RECOMMENDATION_MAX_WEIGHT) * RUBRIC_MAX_TOTAL;
+    (Number(recommendationWeight) / RECOMMENDATION_MAX_WEIGHT) * 100;
 
-  return (rubricTotal + feedbackComponent + recommendationComponent) / 3;
+  return (rubricComponent + feedbackComponent + recommendationComponent) / 3;
 }
 
+// Result cut-offs on the participant's average score (0-100): 65 and above is
+// Selected, 40 to below 65 is Waitlisted, below 40 is Rejected. Mirrored in
+// ann-mis-web/src/constants/evaluation.js.
+export const SELECTED_MIN_SCORE = 65;
+export const WAITLISTED_MIN_SCORE = 40;
+
 export function deriveSelectionStatus(averageScore) {
-  if (averageScore >= 70) return SELECTION_STATUS.SELECTED;
-  if (averageScore >= 40) return SELECTION_STATUS.WAITLISTED;
+  if (averageScore >= SELECTED_MIN_SCORE) return SELECTION_STATUS.SELECTED;
+  if (averageScore >= WAITLISTED_MIN_SCORE) return SELECTION_STATUS.WAITLISTED;
   return SELECTION_STATUS.REJECTED;
 }

@@ -165,6 +165,7 @@ const buildTables = async () => {
       fgd_code: fgdsById.get(e.fgd_id)?.fgd_code || "",
       champion_code: championsById.get(e.champion_id)?.champion_code || "",
       status: e.status || "Submitted",
+      rubric_version: e.rubric_version || "v1",
       rubric_total: isNum(e.rubric_total) ? e.rubric_total : "",
       feedback_option: e.feedback_option || "",
       recommendation_option: e.recommendation_option || "",

@@ -8,7 +8,9 @@ import {
   RECOMMENDATION_OPTIONS,
   REQUIRED_EVALUATIONS,
   SELECTION_STATUS,
-  RUBRIC_CRITERIA,
+  CURRENT_RUBRIC_VERSION,
+  RUBRIC_VERSION,
+  getRubric,
   computeRubricTotal,
   computeEvaluatorScore,
   deriveSelectionStatus,
@@ -323,6 +325,35 @@ router.post("/participants/:participantId/evaluate", async (req, res) => {
     const existingSnap = await evaluationRef.get();
     const existingData = existingSnap.exists ? existingSnap.data() : null;
 
+    // Which rubric this evaluation is scored on. An evaluator keeps the one
+    // their own earlier save used (an evaluation without a version predates
+    // the updated rubric, so it is v1). Otherwise the FGD decides: it is
+    // locked to a version the first time anyone evaluates in it, so all
+    // three committee members score on the same rubric. An FGD that has no
+    // lock yet but already holds evaluations is a pre-update FGD (v1); an
+    // FGD with none starts on the current rubric.
+    const fgdRef = db.collection(COLLECTIONS.FGDS).doc(participant.fgd_id);
+    const fgdSnap = await fgdRef.get();
+    const lockedVersion = fgdSnap.exists ? fgdSnap.data().rubric_version : undefined;
+
+    let rubricVersion;
+
+    if (existingData) {
+      rubricVersion = existingData.rubric_version || RUBRIC_VERSION.V1;
+    } else if (lockedVersion) {
+      rubricVersion = lockedVersion;
+    } else {
+      const anyEvaluation = await db
+        .collection(COLLECTIONS.PARTICIPANT_EVALUATIONS)
+        .where("fgd_id", "==", participant.fgd_id)
+        .limit(1)
+        .get();
+
+      rubricVersion = anyEvaluation.empty ? CURRENT_RUBRIC_VERSION : RUBRIC_VERSION.V1;
+    }
+
+    const rubric = getRubric(rubricVersion);
+
     // Once an evaluation is actually Submitted, it's a final record — further
     // saves go through the strict/final path below regardless of is_draft, so
     // a stray draft-save request can never quietly downgrade a finished
@@ -352,7 +383,7 @@ router.post("/participants/:participantId/evaluate", async (req, res) => {
         return res.status(400).json({ error: "rubric_scores is required." });
       }
 
-      for (const criterion of RUBRIC_CRITERIA) {
+      for (const criterion of rubric.criteria) {
         const raw = rubric_scores[criterion.key];
         const value = Number(raw);
 
@@ -377,11 +408,12 @@ router.post("/participants/:participantId/evaluate", async (req, res) => {
     // already treats missing/invalid entries as 0, safe to call on partial
     // data. computed_score needs a valid feedback+recommendation weight, so
     // it stays null until both are actually chosen.
-    const rubricTotal = rubric_scores ? computeRubricTotal(rubric_scores) : 0;
+    const rubricTotal = rubric_scores ? computeRubricTotal(rubric_scores, rubricVersion) : 0;
     const computedScore =
       feedback && recommendation && rubric_scores
         ? computeEvaluatorScore({
             rubricScores: rubric_scores,
+            rubricVersion,
             feedbackWeight: feedback.weight,
             recommendationWeight: recommendation.weight,
           })
@@ -394,6 +426,7 @@ router.post("/participants/:participantId/evaluate", async (req, res) => {
       fgd_id: participant.fgd_id,
       champion_id: req.champion.id,
       evaluator_name: req.champion.name || "",
+      rubric_version: rubricVersion,
       rubric_scores: rubric_scores || {},
       rubric_total: rubricTotal,
       feedback_option: feedback_option || "",
@@ -403,10 +436,15 @@ router.post("/participants/:participantId/evaluate", async (req, res) => {
       computed_score: computedScore,
       notes: notes ? String(notes).trim() : "",
       status: saveAsDraft ? "Draft" : "Submitted",
-      created_at: existingData ? existingData.created_at : now,
+      created_at: existingData?.created_at || now,
       updated_at: now,
       submitted_at: saveAsDraft ? existingData?.submitted_at || null : now,
     });
+
+    // First evaluation in this FGD: lock it to the rubric it was scored on.
+    if (fgdSnap.exists && !lockedVersion) {
+      await fgdRef.update({ rubric_version: rubricVersion });
+    }
 
     if (saveAsDraft) {
       return res.status(200).json({ success: true, status: "Draft" });
